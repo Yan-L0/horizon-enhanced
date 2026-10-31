@@ -1,0 +1,8 @@
+{
+  "crates/horizon-client/src/game.rs": "a2297f9b6824067e0c675368e4a569f2b7707bfc5ec009c96db9455f36cf85ec",
+  "crates/horizon-client/src/game/lan_actions.rs": "344876911c2da77758189a9e00422c05fa8adaf23fbcf102637fd012ff02f5ee",
+  "crates/horizon-client/src/game/remote.rs": "da0aec44fc4dc85cb9acb99f76d5fa71aab1978894a588f6aaa40c9733081eb9",
+  "crates/horizon-client/src/game/native_hooks.rs": "eb74baa71678f2dde479dea23efb0bce57efbeb3e89b5c63ad26d9b166e70335",
+  "crates/horizon-client/src/game/ui_control.rs": "826a07e91f3b4b801fafb42d7fc3484074bf22140ca599e811cd46d3c2404ba6",
+  "crates/horizon-client/src/game/control.rs": "834e1facc61bd108a128f9c3975ff4d743eb182b45f551f09a25fbb59d7f9999"
+}

@@ -1,0 +1,17 @@
+{
+  "shader_tests": 50,
+  "renderer_gpu_tests": 21,
+  "gpu": "Apple M2",
+  "finder_title_screen": true,
+  "bootstrap": {
+    "migration_once": true,
+    "render_scale_preserved": true,
+    "other_options_preserved": true,
+    "quality_choice_preserved_on_second_launch": true
+  },
+  "fps": {
+    "baseline": 48.5139102935791,
+    "fixed-original": 56.633249282836914,
+    "balanced": 46.9755859375
+  }
+}

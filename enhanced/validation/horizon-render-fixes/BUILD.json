@@ -1,0 +1,11 @@
+{
+  "base_horizon": "1da354b67a509812c4141b67de2affd6de65c342",
+  "build": "experimental-private-0.2.0",
+  "platform": "macOS arm64",
+  "files": {
+    "Horizon Enhanced.app/Contents/MacOS/horizon-client": "7ef56f730f99781d659063f84ee2f10837252412ba6220f3dc46acf204aa29a0",
+    "Horizon Enhanced.app/Contents/Resources/BSL_v10.1.8.zip": "36b0a50ff7918bf10e9422c401d93779f9d0088a26acea975b435243f96930b5",
+    "Horizon Enhanced.app/Contents/Resources/launch.py": "cc995e54c09e15ba9e3cb5add35e3d6066a4cdc8091be0715cdbdc5d93ef76ab",
+    "renderer.patch": "45e255c855a1d26700a2d14ead0dd79a663032298a6aace18950c42ff6be0124"
+  }
+}

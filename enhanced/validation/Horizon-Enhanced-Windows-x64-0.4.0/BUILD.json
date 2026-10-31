@@ -1,0 +1,28 @@
+{
+  "name": "Horizon Enhanced",
+  "version": "0.4.0-windows.1-private",
+  "target": "x86_64-pc-windows-msvc",
+  "base_commit": "1da354b67a509812c4141b67de2affd6de65c342",
+  "rust": "1.99.1",
+  "compiler": "cargo-xwin 0.23.1, LLVM 23.1.4, MSVC SDK",
+  "profile": "fast: release optimization, no LTO",
+  "crt": "static",
+  "upgrader": false,
+  "files": {
+    "Launch-Horizon.ps1": "10ee4716f9f10396a961de59e1b0b9f2f71f1ed9cb03e82101dd93ac5a5270f7",
+    "START-HERE-RU.txt": "7142da8d003994f29c847fd12b3b5428263dafa82a74bc6f47550bb8c1f894ae",
+    "horizon-ctl.exe": "9e4a82dfb0b76e44f78ce4cd7f50310578302212c9f1bdf9bc3b0dafd2ec5c7c",
+    "README-English.txt": "1096355832742d63dc5a804e931eb46e8d12d074f3d14224ab11f9fc376c3567",
+    "THIRD_PARTY_NOTICES.md": "3339f6f0b51e916d685fcdf26f7a878545e03c2b9cb045f0649f5be1eea753fc",
+    "BSL_Horizon_Balanced_r2_v10.1.8.json": "65a27d74f127ed93ca168d3f656be03ba5bf309ee6a2c9c494f556290affa366",
+    "VALIDATION.json": "044037b9a4143e9f5adee8f0433580908e3c0d144ebe3f3cedf7e8f7ce0f3c9d",
+    "HORIZON-LICENSE.txt": "b4b374ae9d0f2d8f7be35c6783e41327431da3b5662605da9ba31493630621df",
+    "renderer.patch": "6bf07f476a8ccdce666ae4ac2e2e7b170e9bb8d4f016d2f844e655c23d8eaebc",
+    "Launch-Horizon.cmd": "abc2c5123ab0030b20ecf8c1f8dba20625bb36b0210600b712bed1ee1b3a1c1c",
+    "horizon-client.exe": "c58561c19979aae4f08338c0073feae775979fce9467b8500792a803c313b0c6",
+    "BSL_Horizon_Quality_r2_v10.1.8.json": "07e30c1a4eff83fd9be55be3ef1bbea1e512752a8750fe209002c8f0ef825194",
+    "resources/BSL_Horizon_Balanced_r2_v10.1.8.zip": "6564c19806113610aba0733a2032aba9851550d2c6ebd51147976f568962ef6d",
+    "resources/BSL_Horizon_Quality_r2_v10.1.8.zip": "75945c483006bcb5fc87cfa52460a18c28afb8635c246df66e821219408a2918",
+    "resources/BSL_v10.1.8.zip": "36b0a50ff7918bf10e9422c401d93779f9d0088a26acea975b435243f96930b5"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "base_horizon": "1da354b67a509812c4141b67de2affd6de65c342",
+  "build": "experimental-private-0.4.0",
+  "platform": "macOS arm64",
+  "files": {
+    "Horizon Enhanced.app/Contents/MacOS/horizon-client": "98fa8589ac3a7a640a10de7387dc1eb8e47cbd5475392f7cbe37a2d854c34914",
+    "Horizon Enhanced.app/Contents/Resources/BSL_v10.1.8.zip": "36b0a50ff7918bf10e9422c401d93779f9d0088a26acea975b435243f96930b5",
+    "Horizon Enhanced.app/Contents/Resources/launch.py": "43c6083e6215c786a298e1f96b7ceda315e3b8b9b9264dccdb34f71464e4dc46",
+    "renderer.patch": "6bf07f476a8ccdce666ae4ac2e2e7b170e9bb8d4f016d2f844e655c23d8eaebc",
+    "Horizon Enhanced.app/Contents/MacOS/horizon-ctl": "61812d95f63241bd7f5452bd3fe8e2e21a032b0fb12a8c5809b28d1fd8e73fde",
+    "Horizon Enhanced.app/Contents/Resources/BSL_Horizon_Balanced_r2_v10.1.8.zip": "6564c19806113610aba0733a2032aba9851550d2c6ebd51147976f568962ef6d",
+    "Horizon Enhanced.app/Contents/Resources/BSL_Horizon_Quality_r2_v10.1.8.zip": "75945c483006bcb5fc87cfa52460a18c28afb8635c246df66e821219408a2918"
+  },
+  "upstream_shadow_camera": "7aa0e28faee33841b60906e69f16b47e54681a7f",
+  "upgrader_included": false,
+  "tests": 28
+}

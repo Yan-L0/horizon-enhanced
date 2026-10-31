@@ -1,0 +1,1 @@
+{"template": "minecraft:stick", "max_stack_size": 1, "rarity": "rare", "components": {"minecraft:item_model": "upgrader:upgrader", "minecraft:item_name": {"translate": "item.upgrader.upgrader"}}}

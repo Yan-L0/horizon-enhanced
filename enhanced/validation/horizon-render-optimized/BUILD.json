@@ -1,0 +1,16 @@
+{
+  "base_horizon": "1da354b67a509812c4141b67de2affd6de65c342",
+  "build": "experimental-private-0.3.0",
+  "platform": "macOS arm64",
+  "files": {
+    "Horizon Enhanced.app/Contents/MacOS/horizon-client": "bd52607b1c6e04ebf44774389c7971d294ac84b672ba7fe25ad8a9756e7fdb01",
+    "Horizon Enhanced.app/Contents/Resources/BSL_v10.1.8.zip": "36b0a50ff7918bf10e9422c401d93779f9d0088a26acea975b435243f96930b5",
+    "Horizon Enhanced.app/Contents/Resources/launch.py": "410930a556816c1dd15496174b1937dee889cd6cd3701afce8dee67363894621",
+    "renderer.patch": "894b304e3600c6a86dd254378c38161daed3d6cb9c9829c6c660ccbe9f2cf710",
+    "Horizon Enhanced.app/Contents/Resources/BSL_Horizon_Quality_v10.1.8.zip": "47e397aad007f046d447e83046752d387f197f73825f8d36023609ba7d4d2dfb",
+    "Horizon Enhanced.app/Contents/Resources/BSL_Horizon_Balanced_v10.1.8.zip": "a3a6474eca66d50f80f34f82c9aeeb23b542a3dbe012b5ddb1820692a5dd918f"
+  },
+  "upstream_reviewed": "7aa0e28faee33841b60906e69f16b47e54681a7f",
+  "upgrader_included": false,
+  "optimization": "Conservative mip demand with same-pass overwrite guard; original allocation and shader quality unchanged"
+}

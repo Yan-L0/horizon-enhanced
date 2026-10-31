@@ -34,3 +34,16 @@
 
 # Release-only compiled original exporter bundle.
 /exporters/
+
+# Enhanced private workspace outputs and third-party inputs.
+/enhanced/dist/
+/enhanced/private-inputs/
+/enhanced/archive/upgrader/target/
+*.exe
+*.dmg
+*.pdb
+*.zip
+*.tar.gz
+*.tar.xz
+.env
+.env.*

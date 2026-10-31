@@ -1,0 +1,60 @@
+{
+  "renderer_gpu_tests_passed": 23,
+  "finder": {
+    "title_screen": true,
+    "upgrader_resource_absent": true,
+    "upgrader_launch_argument_absent": true,
+    "state": {
+      "busy": null,
+      "dialog": {
+        "open": null,
+        "screen": null
+      },
+      "dimension": "minecraft:overworld",
+      "gamemode": "survival",
+      "held": null,
+      "looking_at": null,
+      "menu": {
+        "mode": "main",
+        "worlds": []
+      },
+      "mining": null,
+      "paused": false,
+      "player": null,
+      "pointer_grabbed": false,
+      "screen": "title",
+      "selected": 1,
+      "sleeping": null,
+      "swings": 0,
+      "ticks": 0,
+      "time": {
+        "day": 0,
+        "day_time": 1000,
+        "time_of_day": 1000
+      },
+      "using": null,
+      "weather": {
+        "raining": false,
+        "thundering": false
+      },
+      "world": null
+    }
+  },
+  "bootstrap": {
+    "migration_once": true,
+    "render_scale_preserved": true,
+    "other_options_preserved": true,
+    "alternative_choice_preserved_on_second_launch": true
+  },
+  "baseline_fps": 56.71517753601074,
+  "optimized_fps": 58.10329055786133,
+  "gain_percent": 2.447515959849045,
+  "same_pack_sha256": "47e397aad007f046d447e83046752d387f197f73825f8d36023609ba7d4d2dfb",
+  "physical_size": [
+    3420,
+    1954
+  ],
+  "scale": 75,
+  "chunks": 6,
+  "note": "Sequential short measurements in a synthetic scene, uncapped/VSync off; not a guarantee for other worlds. First optimized run overlapped test compilation and is diagnostic only."
+}

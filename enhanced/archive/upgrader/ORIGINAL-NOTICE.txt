@@ -1,0 +1,5 @@
+Upgrader 1.3.0 original author: EXEcheINZ. Original mod metadata: All Rights Reserved.
+Private local Rust adaptation from the JAR supplied by the user. Not published.
+Horizon source revision: 1da354b67a509812c4141b67de2affd6de65c342, MIT license.
+Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.
+Minecraft game resources are not included.

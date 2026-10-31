@@ -1,0 +1,29 @@
+{
+  "renderer_gpu_tests_passed": 28,
+  "source_patch_dry_run": true,
+  "finder": {
+    "title_screen": true,
+    "bundled_ctl_connected": true
+  },
+  "bootstrap": {
+    "migration_once": true,
+    "render_scale_preserved": true,
+    "other_options_preserved": true,
+    "alternative_choice_preserved_on_second_launch": true
+  },
+  "profile_migration": {
+    "BSL_Horizon_Balanced_v10.1.8.zip": "preserved/migrated correctly",
+    "my-pack.zip": "preserved/migrated correctly"
+  },
+  "cave_fps_before": 78.17957305908203,
+  "cave_fps_after": 87.62305450439453,
+  "cave_gain_percent": 12.079218491223864,
+  "exterior_quality_r2_fps": 58.554439544677734,
+  "size": [
+    3420,
+    1954
+  ],
+  "render_scale": 75,
+  "render_distance_chunks": 6,
+  "note": "Copied player world, frozen time8000, uncapped Immediate. Cave comparison includes shadow correction and underground profile approximation as well as renderer optimization. Not a universal FPS/CPU/power claim."
+}

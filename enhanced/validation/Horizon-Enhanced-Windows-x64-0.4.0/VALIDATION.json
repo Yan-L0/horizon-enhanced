@@ -1,0 +1,17 @@
+{
+  "scale_preserved": true,
+  "architecture": "Arm64",
+  "profile_migrated": true,
+  "runtime_log": "Horizon v0.4.0-windows.1-private\nload assets: 95.91s\nload facts: 102.08s\nload biomes+env: 102.10s\nload pack tables: 155.33s\nload collision+motion: 158.76s\nload items: 170.14s\nHorizon: resources loaded in 171.5s; 35723 block states, 1658 items, 67 biomes; 3 worker threads\nHorizon: no sound: audio off: HORIZON_NO_AUDIO is set\nHorizon: control socket <WINDOWS_USER_HOME>\\AppData\\Local\\Temp\\Horizon Enhanced Smoke 0d489435191e45049a1b28eacbbc3a3b\\control.json\nHorizon renderer: Vulkan has no conformant adapter (Vulkan: No suitable graphics adapter found; noop not requested, vulkan drivers/libraries could not be loaded, metal not requested, dx12 not requested, gl not requested, webgpu not requested); asking again for the ones wgpu hides as non-conformant\nHorizon renderer: trying DirectX 12 (Vulkan: No suitable graphics adapter found; noop not requested, vulkan drivers/libraries could not be loaded, metal not requested, dx12 not requested, gl not requested, webgpu not requested)\nHorizon renderer: Microsoft Basic Render Driver (Dx12, Cpu)\nHorizon renderer: requesting the device (driver 10.0.26100.8875) with features [TEXTURE_FORMAT_16BIT_NORM | TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES | TIMESTAMP_QUERY_INSIDE_ENCODERS | MAPPABLE_PRIMARY_BUFFERS | TIMESTAMP_QUERY | INDIRECT_FIRST_INSTANCE | RG11B10UFLOAT_RENDERABLE] and the adapter's limits (buffers up to 2147483647 bytes, storage bindings up to 2147483644 bytes, 2048 texture layers)\nHorizon renderer: creating the pipelines\nHorizon renderer: pipelines ready (multi-draw on, occlusion culling off, GPU timer on)\nHorizon: worldgen data loaded in 4.728656584s\nHorizon: live features ready in 5.601810583s\nHorizon: frame-limited run timed out\n",
+  "api_exit": 0,
+  "home_with_spaces": true,
+  "game_exit": -1,
+  "target": "x86_64-pc-windows-msvc",
+  "resources_loaded": true,
+  "dx12_initialized": true,
+  "vm_gpu": "Microsoft Basic Render Driver (CPU)",
+  "temporary_world_server_join": true,
+  "full_shader_visual_test": false,
+  "real_gpu_performance_test": false,
+  "limitation": "VM startup exceeded test time budget; resources loaded in 171.5s."
+}

@@ -1,0 +1,8 @@
+id = "upgrader"
+name = "Upgrader"
+version = "0.1.0"
+description = "Upgrader item and recipe; requires the matching Rust port client."
+authors = ["EXEcheINZ (original)", "Private Horizon port"]
+api = "0.2"
+side = "both"
+capabilities = ["registries"]

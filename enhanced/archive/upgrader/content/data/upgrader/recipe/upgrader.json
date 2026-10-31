@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "pattern": [
+    "GDG",
+    "DAD",
+    "GDG"
+  ],
+  "key": {
+    "G": "minecraft:gold_ingot",
+    "D": "minecraft:diamond",
+    "A": "minecraft:anvil"
+  },
+  "result": {
+    "id": "upgrader:upgrader",
+    "count": 1
+  }
+}

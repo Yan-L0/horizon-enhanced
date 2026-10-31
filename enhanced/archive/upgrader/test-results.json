@@ -1,0 +1,49 @@
+{
+  "ui": {
+    "ui_click_win_inventory": {
+      "minecraft:diamond": 1,
+      "upgrader:upgrader": 1
+    },
+    "saved_spin_ticks": 40,
+    "saved_iron_price": 123.0,
+    "widgets_tested": [
+      "inventory",
+      "catalog",
+      "search",
+      "target",
+      "start",
+      "settings",
+      "numeric field",
+      "save",
+      "price filter",
+      "price override"
+    ]
+  },
+  "edge_cases": {
+    "partial_stake": {
+      "minecraft:diamond": 2,
+      "minecraft:iron_ingot": 5,
+      "upgrader:upgrader": 1
+    },
+    "observed_loss": {
+      "minecraft:diamond": 2,
+      "upgrader:upgrader": 1
+    },
+    "cooldown_preserved_input": {
+      "minecraft:diamond": 2,
+      "minecraft:iron_ingot": 1,
+      "upgrader:upgrader": 1
+    }
+  },
+  "lan": {
+    "guest_upgrade": {
+      "minecraft:diamond": 1,
+      "upgrader:upgrader": 1
+    },
+    "host_unchanged": {
+      "minecraft:diamond": 1,
+      "upgrader:upgrader": 1
+    },
+    "guest_config_readonly": true
+  }
+}
