@@ -2,7 +2,7 @@
 # No downloads, resource preparation, or changes to another launcher's data.
 $ErrorActionPreference = 'Stop'
 $GameArguments = @($args)
-$BuildVersion = '0.4.0-windows.1'
+$BuildVersion = '0.4.1-windows.1'
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 $LauncherLog = $null
 

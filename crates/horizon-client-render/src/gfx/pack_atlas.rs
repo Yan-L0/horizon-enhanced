@@ -113,7 +113,7 @@ impl PackAtlas {
     }
 }
 
-/// GLSL: the face normal and tangent of a flat-drawn vertex, from its quad's first three corners
+/// GLSL: the face normal and tangent of a terrain vertex, from its quad's first three corners
 /// (quads are four consecutive vertices of the page; position words 0-2, UV word 3).
 const FACE: &str = "    uint hz_q = (uint(gl_VertexIndex) & ~3u) * 6u;\n    \
     vec3 hz_p0 = uintBitsToFloat(uvec3(hz_vertices[hz_q], hz_vertices[hz_q + 1u], hz_vertices[hz_q + 2u]));\n    \
@@ -151,17 +151,17 @@ impl PackAtlas {
                 "layout(set = 1, binding = 0) readonly buffer HzBlockSlots { uint hz_block_slots[]; };\n\
                  layout(set = 1, binding = 1) readonly buffer HzSlotOrigins { vec4 hz_slot_origins[]; };\n",
             );
-            // `mc_Entity` of each sprite layer: id, then 1 for fluids or -1 (the game's table),
-            // and the arena page's vertices (`TerrainVertex`, six words each).
-            declarations.push_str(
-                "layout(set = 3, binding = 0) readonly buffer HzBlockIds { int hz_block_ids[]; };\n\
-                 layout(set = 3, binding = 1) readonly buffer HzVertices { uint hz_vertices[]; };\n",
-            );
             "hz_slot_origins[hz_block_slots[uint(gl_VertexIndex) >> 8u]]"
         } else {
             declarations.push_str("layout(location = 5) in vec4 hz_v_origin;\n");
             "hz_v_origin"
         };
+        // Both the flat and native multi-draw paths carry sprite layers, not material ids
+        // or face normals. Read those from the same per-page tables on every backend.
+        declarations.push_str(
+            "layout(set = 3, binding = 0) readonly buffer HzBlockIds { int hz_block_ids[]; };\n\
+             layout(set = 3, binding = 1) readonly buffer HzVertices { uint hz_vertices[]; };\n",
+        );
         let [width, height] = self.size();
         let scale = [
             self.sprite as f32 / width as f32,
@@ -185,15 +185,9 @@ impl PackAtlas {
             scale[0], scale[1],
         );
         let mut body = body;
-        if flat {
-            body.push_str(FACE);
-        }
+        body.push_str(FACE);
         declarations.push_str("vec2 hz_cell; vec2 hz_scale; vec4 hz_tangent;\n");
-        let entity = if flat {
-            "vec4(float(hz_block_ids[2u * hz_layer]), float(hz_block_ids[2u * hz_layer + 1u]), 0.0, 0.0)"
-        } else {
-            "vec4(-1.0, -1.0, 0.0, 0.0)"
-        };
+        let entity = "vec4(float(hz_block_ids[2u * hz_layer]), float(hz_block_ids[2u * hz_layer + 1u]), 0.0, 0.0)";
         let attributes = [
             ("mc_Entity", entity),
             (
@@ -229,6 +223,262 @@ impl PackAtlas {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Native Windows/Vulkan multi-draw must feed the same material and tangent frame as
+    /// Metal's flat draws. Otherwise BSL treats water as generic textured transparency.
+    #[test]
+    fn native_and_flat_vertices_preserve_water_material_and_face_basis() {
+        use crate::mesher::TerrainVertex;
+        use horizon_shaders::{Preprocessed, Target, translate_gbuffers};
+        use wgpu::util::DeviceExt;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            assert!(
+                std::env::var_os("HORIZON_REQUIRE_GPU").is_none(),
+                "GPU required"
+            );
+            return;
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let atlas = PackAtlas {
+            view: texture.create_view(&Default::default()),
+            texture,
+            columns: 1,
+            sprite: 1,
+            split: 1,
+        };
+        let buffer = |data: &[u8], usage| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: data,
+                usage,
+            })
+        };
+        // Start the tested quad at a nonzero arena offset, as real section draws do.
+        let mut vertices = vec![TerrainVertex::new([0.0; 3], [0.0; 2], 0, u32::MAX, 0); 4];
+        for (pos, uv) in [
+            ([-1.0, -1.0, 0.5], [0.0, 0.0]),
+            ([1.0, -1.0, 0.5], [1.0, 0.0]),
+            ([1.0, 1.0, 0.5], [1.0, 1.0]),
+            ([-1.0, 1.0, 0.5], [0.0, 1.0]),
+        ] {
+            vertices.push(TerrainVertex::new(pos, uv, 1, u32::MAX, 0));
+        }
+        let vertex = buffer(
+            bytemuck::cast_slice(&vertices),
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
+        );
+        let index = buffer(
+            bytemuck::cast_slice(&[0u32, 1, 2, 0, 2, 3]),
+            wgpu::BufferUsages::INDEX,
+        );
+        let origins = buffer(
+            bytemuck::cast_slice(&[
+                [100.0f32, 100.0, 0.0, 1.0 / 32768.0],
+                [0.0, 0.0, 0.0, 1.0 / 32768.0],
+            ]),
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
+        );
+        let slots = buffer(bytemuck::cast_slice(&[1u32]), wgpu::BufferUsages::STORAGE);
+        let ids = buffer(
+            bytemuck::cast_slice(&[-1i32, -1, 20000, 1]),
+            wgpu::BufferUsages::STORAGE,
+        );
+        let uniforms = buffer(&[0u8; 4096], wgpu::BufferUsages::UNIFORM);
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 256,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let storage = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let empty = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[],
+        });
+        let globals = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let group = |layout: &wgpu::BindGroupLayout, buffers: &[(u32, &wgpu::Buffer)]| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout,
+                entries: &buffers
+                    .iter()
+                    .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                        binding: *binding,
+                        resource: buffer.as_entire_binding(),
+                    })
+                    .collect::<Vec<_>>(),
+            })
+        };
+        let globals_group = group(&globals, &[(0, &uniforms)]);
+        let materials = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[storage(0), storage(1)],
+        });
+        let material_group = group(&materials, &[(0, &ids), (1, &vertex)]);
+        let section = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[storage(0), storage(1)],
+        });
+        let section_group = group(&section, &[(0, &slots), (1, &origins)]);
+        let stage = |code: &str| Preprocessed {
+            code: code.into(),
+            version: Some((120, None)),
+            ..Default::default()
+        };
+        let vs = stage(
+            "attribute vec4 mc_Entity; attribute vec4 at_tangent; varying vec4 result;\nvoid main() { gl_Position = gl_Vertex; result = vec4(float(int(mc_Entity.x / 100.0) == 200 && mc_Entity.y == 1.0), abs(gl_Normal.z), abs(at_tangent.x), 1.0); }\n",
+        );
+        let fs = stage("varying vec4 result; void main() { gl_FragColor = result; }\n");
+        for flat in [false, true] {
+            let program =
+                translate_gbuffers(&vs, &fs, Target::Buffers, &atlas.terrain_inputs(flat))
+                    .unwrap_or_else(|e| panic!("{e:?}"));
+            let module = |source| {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: None,
+                    source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(source)),
+                })
+            };
+            let (vs, fs) = (module(program.vertex), module(program.fragment));
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[
+                    Some(&globals),
+                    Some(if flat { &section } else { &empty }),
+                    Some(&empty),
+                    Some(&materials),
+                ],
+                ..Default::default()
+            });
+            let instance_attributes = wgpu::vertex_attr_array![5=>Float32x4];
+            let buffers = [
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: 24,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &super::super::TERRAIN_ATTRIBUTES,
+                }),
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: 16,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &instance_attributes,
+                }),
+            ];
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &vs,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    buffers: if flat { &buffers[..1] } else { &buffers },
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &fs,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &atlas.view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &globals_group, &[]);
+                if flat {
+                    pass.set_bind_group(1, &section_group, &[]);
+                }
+                pass.set_bind_group(3, &material_group, &[]);
+                pass.set_vertex_buffer(0, vertex.slice(..));
+                if !flat {
+                    pass.set_vertex_buffer(1, origins.slice(..));
+                }
+                pass.set_index_buffer(index.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..6, 4, 1..2);
+            }
+            encoder.copy_texture_to_buffer(
+                atlas.texture.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &read,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(256),
+                        rows_per_image: None,
+                    },
+                },
+                atlas.texture.size(),
+            );
+            queue.submit([encoder.finish()]);
+            read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            {
+                let data = read.slice(..).get_mapped_range().unwrap();
+                assert_eq!(
+                    &data[..4],
+                    &[255, 255, 255, 255],
+                    "flat={flat}: water id / face normal / tangent"
+                );
+            }
+            read.unmap();
+        }
+    }
 
     /// Two arrays of 2x2 sprites, one layer split; each layer a colour of its own.
     #[test]

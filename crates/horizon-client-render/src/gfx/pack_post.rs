@@ -358,7 +358,7 @@ pub struct PackPost {
     down: HashMap<wgpu::TextureFormat, (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// The per-draw uniforms of gbuffers programs.
     draws: DrawUniforms,
-    /// Set 3 of flat terrain (`mc_Entity`'s table) and its bind group for each arena page,
+    /// Set 3 of terrain (`mc_Entity`'s table) and its bind group for each arena page,
     /// with the page buffer it was made for.
     block_ids: Option<(wgpu::BindGroupLayout, wgpu::Buffer)>,
     page_groups: HashMap<u32, (wgpu::Buffer, wgpu::BindGroup)>,
@@ -743,7 +743,7 @@ pub(super) struct ShadowView {
     pub distance: Option<f32>,
 }
 
-/// Set 3 of flat terrain, read by the vertex stage: `mc_Entity`'s table (-1 pairs when empty)
+/// Set 3 of terrain, read by the vertex stage: `mc_Entity`'s table (-1 pairs when empty)
 /// and, per arena page, the page's vertices (a vertex reads its quad's corners for its normal).
 fn block_ids(device: &wgpu::Device, table: &[i32]) -> (wgpu::BindGroupLayout, wgpu::Buffer) {
     let empty = [-1, -1];
@@ -782,7 +782,7 @@ pub(super) struct Geometry<'a> {
     pub depth_write: bool,
     /// What `texture` reads instead of the block atlas.
     pub atlas: Option<wgpu::TextureView>,
-    /// `mc_Entity`'s table at set 3 (flat terrain).
+    /// `mc_Entity`'s table and quad vertices at set 3 (both terrain paths).
     pub ids: Option<&'a wgpu::BindGroupLayout>,
     /// Back faces are culled, as for the game's own terrain.
     pub cull: bool,
@@ -1283,11 +1283,10 @@ impl PackPost {
             }
             Some(pass)
         };
-        // Flat terrain reads `mc_Entity` from a table of the sprite layers.
+        // Both geometry backends read sprite material ids and quad corners from set 3.
         let block_ids = world
             .terrain
             .as_ref()
-            .filter(|g| g.table.is_some())
             .map(|_| block_ids(device, world.block_ids));
         let terrain_geometry = world.terrain.as_ref().map(|g| Geometry {
             buffers: g.buffers,

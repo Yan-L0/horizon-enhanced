@@ -119,8 +119,13 @@ impl Arena {
         capacity: u64,
         usage: wgpu::BufferUsages,
     ) -> Self {
-        // 256 MiB pages, or less where the device's buffers are smaller.
-        let bytes = device.limits().max_buffer_size.min(PAGE_BYTES);
+        // Shader-pack terrain binds the entire page as storage, including on native
+        // multi-draw devices whose storage binding limit can be below their buffer limit.
+        let limits = device.limits();
+        let mut bytes = limits.max_buffer_size.min(PAGE_BYTES);
+        if usage.contains(wgpu::BufferUsages::STORAGE) {
+            bytes = bytes.min(u64::from(limits.max_storage_buffer_binding_size));
+        }
         let page_limit = (bytes / stride) / GRAIN * GRAIN;
         let capacity = capacity.next_multiple_of(GRAIN).min(page_limit);
         Self {
@@ -405,6 +410,24 @@ mod tests {
         queue.submit([encoder.finish()]);
         assert_eq!(read(&device, &queue, arena.buffer(page), start * 4), 7);
         assert_eq!(read(&device, &queue, arena.buffer(page), next * 4), 9);
+    }
+
+    #[test]
+    fn shader_readable_vertex_pages_fit_storage_binding_limits() {
+        let Some((device, _)) = device() else {
+            assert!(
+                std::env::var_os("HORIZON_REQUIRE_GPU").is_none(),
+                "GPU required"
+            );
+            return;
+        };
+        let stride = std::mem::size_of::<crate::mesher::TerrainVertex>() as u64;
+        let arena = Arena::new(&device, stride, 1 << 20, true);
+        assert!(
+            arena.page_limit * stride <= u64::from(device.limits().max_storage_buffer_binding_size)
+        );
+        assert!(arena.page_limit > 0);
+        assert_eq!(arena.page_limit % GRAIN, 0);
     }
 
     #[test]

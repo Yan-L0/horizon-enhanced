@@ -1,5 +1,7 @@
 # Development milestones
 
+- **Windows 0.4.1:** native multi-draw now supplies shader-pack material IDs and reconstructed face normals/tangents, matching the flat path. Previously BSL received `mc_Entity=-1` on the usual Windows path and could not identify water. Native draw batching is preserved. All 29 renderer pack tests passed on M2/Metal, including a GPU regression for both geometry paths with nonzero vertex/instance offsets. Native Windows visual confirmation remains pending.
+
 All dates are local project dates, October 2026. This Git history starts with a pinned upstream snapshot and imports the completed work honestly; it does not invent historical source commits for earlier binaries.
 
 - **Upgrader 0.1.0, October 30:** experimental Rust port, content item, GUI/settings, pricing and server-authority checks. Source/content retained in archive; excluded from current builds.

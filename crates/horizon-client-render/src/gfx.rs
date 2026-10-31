@@ -2584,12 +2584,13 @@ impl Renderer {
             mapped_at_creation: false,
         });
         let flat_wanted = flat::wanted(&adapter, &device);
-        // Readable as storage where flat draws run: a shader pack's terrain program reads them.
+        // Shader packs read quad corners on both native multi-draw and flat backends.
+        // Mark pages as storage at creation: usage cannot be added when a pack is selected.
         let arena = arena::Arena::new(
             &device,
             std::mem::size_of::<TerrainVertex>() as u64,
             1 << 20,
-            flat_wanted,
+            true,
         );
         // Sections as one index list per frame where multi-draw is emulated.
         let flat = flat_wanted.then(|| {
@@ -3216,6 +3217,18 @@ impl Renderer {
         first: u32,
         count: u32,
     ) {
+        self.draw_sections_with(pass, indirect, base, first, count, &|_, _| {});
+    }
+    /// As `draw_sections`, binding shader-pack material and quad data once per arena run.
+    fn draw_sections_with(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        indirect: &wgpu::Buffer,
+        base: u32,
+        first: u32,
+        count: u32,
+        bind_page: &dyn Fn(&mut wgpu::RenderPass<'_>, u32),
+    ) {
         let (draws, pages) = (&self.draws[..], &self.draw_pages[..]);
         let (mut i, end) = (first as usize, (first + count) as usize);
         while i < end {
@@ -3224,6 +3237,7 @@ impl Renderer {
                 .iter()
                 .take_while(|&&p| p == (page, index_page))
                 .count();
+            bind_page(pass, page);
             pass.set_vertex_buffer(0, self.arena.buffer(page).slice(..));
             let indices = index_page.map_or(&self.indices, |p| self.sorted_indices.buffer(p));
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -5287,13 +5301,13 @@ impl Renderer {
             };
             post.set_weather(weather);
             let flat = self.flat.as_ref().filter(|_| flat_frame);
-            let pages: Vec<(u32, wgpu::Buffer)> = match flat {
-                Some(_) if pack_draws_terrain || pack_draws_shadow => self
-                    .arena
+            let pages: Vec<(u32, wgpu::Buffer)> = if pack_draws_terrain || pack_draws_shadow {
+                self.arena
                     .page_buffers()
                     .map(|(p, b)| (p, b.clone()))
-                    .collect(),
-                _ => Vec::new(),
+                    .collect()
+            } else {
+                Vec::new()
             };
             let mut terrain =
                 |rp: &mut wgpu::RenderPass<'_>,
@@ -5330,7 +5344,7 @@ impl Renderer {
                                     (shadow_first + shadow_solid, shadow_translucent)
                                 }
                             };
-                            self.draw_sections(rp, &self.indirect, 0, first, count);
+                            self.draw_sections_with(rp, &self.indirect, 0, first, count, page);
                         }
                     }
                 };
