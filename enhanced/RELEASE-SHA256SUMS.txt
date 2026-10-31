@@ -4,3 +4,4 @@ a704d28f609eb0eabe21152a7c0ec7778b932dde19b81a867d360577e1fdd486  Horizon-Enhanc
 d3da582a59c671587cc8299ce189655ef5a476e17b04d8d6f53fc8922a8873c2  Horizon-Enhanced-macOS-arm64-v0.2.0.zip
 c2e545024b11fd24b1ac20162a633f354b59385b26c76a0390f437b15521ce45  Horizon-Enhanced-macOS-arm64-v0.3.0.zip
 3bd90c307a25d8654b57707b043db3415f3fb4bb1df0150e7df57a89b08e5a5b  Horizon-Upgrader-macOS-arm64.zip
+781e11f7aa3d159964c005dc6dd85fc574557a69f9970fcfc7e1595f0c0b2952  Horizon-Enhanced-Windows-x64-v0.4.1.zip
