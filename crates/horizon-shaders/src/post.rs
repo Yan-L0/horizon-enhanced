@@ -265,6 +265,8 @@ pub struct Post {
     pub particles_late: bool,
     /// The custom uniforms of `shaders.properties` (3.4).
     pub custom: Custom,
+    /// Optional PNG named by `texture.noise`, limited to 8 MiB encoded.
+    pub noise_texture: Option<Vec<u8>>,
     pub config: Config,
     /// Programs skipped and why, as `program: message` or `file:line: message`.
     pub notes: Vec<String>,
@@ -334,9 +336,19 @@ pub fn load_post(
         translucent_late: false,
         particles_late: false,
         custom: Custom::parse(properties),
+        noise_texture: None,
         config: Config::default(),
         notes: Vec::new(),
     };
+    if let Some(path) = properties.get("texture.noise") {
+        let path = path.trim();
+        post.noise_texture = pack.read_limited(path, 8 * 1024 * 1024);
+        if post.noise_texture.is_none() {
+            post.notes.push(format!(
+                "texture.noise: cannot read {path:?} within 8 MiB; using generated noise"
+            ));
+        }
+    }
     let mut loader = Loader {
         pack,
         folder,
@@ -457,7 +469,14 @@ pub fn load_post(
     if let Some(inputs) = &inputs.terrain {
         let terrain = gbuffers(&TERRAIN, Group::Gbuffers, inputs);
         // gbuffers_water falls back to gbuffers_terrain's chain (2.3).
-        let water = gbuffers(&WATER, Group::Translucent, inputs);
+        // A cutout terrain default must not remove faint transparent water or glass.
+        // Program-specific alphaTest properties still override this when loaded.
+        let mut water_inputs = inputs.clone();
+        water_inputs.alpha_test = Some(crate::AlphaTest {
+            op: ">",
+            reference: 0.0,
+        });
+        let water = gbuffers(&WATER, Group::Translucent, &water_inputs);
         loader.post.terrain = terrain;
         loader.post.water = water.map(|mut p| {
             p.blend = blend(properties, &p.name).unwrap_or(Some(TRANSLUCENT_BLEND));
@@ -772,6 +791,34 @@ mod tests {
                        gl_FragData[0] = texture2D(colortex0, uv);\n}\n";
 
     #[test]
+    fn pack_noise_property_loads_bytes_or_reports_a_fallback() {
+        let pack =
+            Pack::from_zip_bytes("noise.zip", zip(&[("shaders/tex/noise.png", "PNG bytes")]))
+                .unwrap();
+        let load = |path| {
+            load_post(
+                &pack,
+                "",
+                &Properties::parse(path, &Macros::default()),
+                &Macros::standard(),
+                &GameInputs::default(),
+            )
+        };
+        let post = load("texture.noise=tex/noise.png");
+        assert_eq!(post.noise_texture.unwrap(), b"PNG bytes");
+        let missing = load("texture.noise=tex/missing.png");
+        assert!(missing.noise_texture.is_none());
+        assert!(
+            missing
+                .notes
+                .iter()
+                .any(|n| n.contains("using generated noise"))
+        );
+        let escape = load("texture.noise=../outside.png");
+        assert!(escape.noise_texture.is_none());
+    }
+
+    #[test]
     fn programs_load_in_order_with_their_settings() {
         let pack = Pack::from_zip_bytes(
             "t",
@@ -937,6 +984,61 @@ mod tests {
 
     /// Water falls back to the terrain chain and blends by default, as the sky does; entities
     /// and block entities fall back along theirs; `blend.*` overrides.
+    #[test]
+    fn terrain_cutout_threshold_is_not_reused_for_faint_water() {
+        let pack = Pack::from_zip_bytes(
+            "cutout.zip",
+            zip(&[
+                (
+                    "shaders/gbuffers_terrain.vsh",
+                    "#version 120\nvoid main() { gl_Position = ftransform(); }\n",
+                ),
+                (
+                    "shaders/gbuffers_terrain.fsh",
+                    "#version 120\nvoid main() { gl_FragData[0] = vec4(1.0, 0.0, 0.0, 0.05); }\n",
+                ),
+            ]),
+        )
+        .unwrap();
+        let macros = Macros::standard();
+        let inputs = GameInputs {
+            terrain: Some(crate::GbuffersInputs {
+                body: "hz_Vertex = vec4(0.0, 0.0, 0.0, 1.0);".into(),
+                alpha_test: Some(crate::AlphaTest {
+                    op: ">",
+                    reference: 0.1,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let has_threshold = |program: &PostProgram, threshold: f32| {
+            let module = &program.program.fragment;
+            let literal = |e: &naga::Expression| {
+                matches!(e,
+                naga::Expression::Literal(naga::Literal::F32(v)) if (*v - threshold).abs() < 1e-6)
+            };
+            module.global_expressions.iter().any(|(_, e)| literal(e))
+                || module
+                    .functions
+                    .iter()
+                    .map(|(_, f)| f)
+                    .chain(module.entry_points.iter().map(|e| &e.function))
+                    .any(|f| f.expressions.iter().any(|(_, e)| literal(e)))
+        };
+        let post = load_post(&pack, "", &Properties::default(), &macros, &inputs);
+        assert!(has_threshold(post.terrain.as_ref().unwrap(), 0.1));
+        assert!(
+            !has_threshold(post.water.as_ref().unwrap(), 0.1),
+            "water alpha 0.05 must survive the terrain alpha 0.1 threshold"
+        );
+        // An author may deliberately override the fallback program's test.
+        let properties = Properties::parse("alphaTest.gbuffers_terrain=GREATER 0.6", &macros);
+        let post = load_post(&pack, "", &properties, &macros, &inputs);
+        assert!(has_threshold(post.terrain.as_ref().unwrap(), 0.6));
+        assert!(has_threshold(post.water.as_ref().unwrap(), 0.6));
+    }
+
     #[test]
     fn water_falls_back_to_terrain_and_blends() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/packs/terrain-test");

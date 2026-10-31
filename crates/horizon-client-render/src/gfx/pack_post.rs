@@ -27,11 +27,16 @@ const BUFFERS: usize = horizon_shaders::BUFFERS;
 enum Source {
     Color(usize),
     Depth,
-    /// `depthtex1`/`depthtex2`: depth without translucent terrain (a copy taken before it).
+    /// `depthtex1`: depth without translucent terrain (a copy taken before it).
     Depth1,
+    /// `depthtex2`: opaque world depth captured before the first-person hand.
+    Depth2,
     Noise,
     /// A 1×1 stand-in for names this slice does not provide yet (custom textures...).
     Dummy,
+    /// Neutral material maps when a resource pack supplies no PBR atlas.
+    Normal,
+    Specular,
     /// A 1×1 depth of 1.0 behind a comparison sampler, until shadow maps exist: no shadow.
     Shadow,
     /// The block atlas (pack_atlas.rs), in gbuffers programs.
@@ -67,17 +72,28 @@ enum SamplerKind {
 impl SamplerKind {
     fn of(source: Source, filtering: bool) -> Self {
         match source {
-            Source::Color(_) | Source::ShadowColor(_) | Source::Dummy if !filtering => {
+            Source::Color(_)
+            | Source::ShadowColor(_)
+            | Source::Dummy
+            | Source::Normal
+            | Source::Specular
+                if !filtering =>
+            {
                 Self::Nearest
             }
-            Source::Depth | Source::Depth1 | Source::ShadowDepth(_, false) => Self::Nearest,
+            Source::Depth | Source::Depth1 | Source::Depth2 | Source::ShadowDepth(_, false) => {
+                Self::Nearest
+            }
             Source::Noise => Self::Repeat,
             Source::Shadow | Source::ShadowDepth(_, true) => Self::Comparison,
             // Blocks look as the game draws them: nearest texels.
             Source::Atlas => Self::NearestRepeat,
-            Source::Color(_) | Source::ShadowColor(_) | Source::Dummy | Source::Lightmap => {
-                Self::Linear
-            }
+            Source::Color(_)
+            | Source::ShadowColor(_)
+            | Source::Dummy
+            | Source::Normal
+            | Source::Specular
+            | Source::Lightmap => Self::Linear,
         }
     }
 
@@ -153,6 +169,35 @@ struct Entities {
     only: (bool, bool),
 }
 
+fn defer_sky(terrain: Option<&Pass>, sky: Option<&Sky>) -> bool {
+    let (Some(terrain), Some(sky)) = (terrain, sky) else {
+        return false;
+    };
+    let mut any = false;
+    for sky in sky.basic.iter().chain(sky.textured.iter()) {
+        any = true;
+        if !sky_after_terrain_safe(
+            terrain.written,
+            terrain.reads,
+            terrain.unblended,
+            terrain.fragment_reorder_safe,
+            sky.written,
+            sky.reads,
+            sky.fragment_reorder_safe,
+        ) {
+            return false;
+        }
+        if sky
+            .samplers
+            .iter()
+            .any(|s| matches!(s.source, Source::Depth | Source::Depth1 | Source::Depth2))
+        {
+            return false;
+        }
+    }
+    any
+}
+
 impl Entities {
     /// Whether a gbuffers program draws some of them (else only the shadow pass does).
     fn drawn(&self) -> bool {
@@ -162,6 +207,9 @@ impl Entities {
 
 #[derive(Clone)]
 struct Pass {
+    /// Reordering is allowed only for ordinary depth-tested fragment outputs.
+    fragment_reorder_safe: bool,
+    unblended: bool,
     name: String,
     group: Group,
     pipeline: wgpu::RenderPipeline,
@@ -183,6 +231,8 @@ struct Pass {
     written: u16,
     /// Buffers whose mip chain is regenerated right before it (6.1.7).
     mipmaps: u16,
+    /// Allocation follows the declared flags even if a reader only samples level zero.
+    declared_mipmaps: u16,
     /// Reads the per-draw block (`DrawUniforms`).
     draw: bool,
     /// What `texture` reads instead of the block atlas.
@@ -210,8 +260,21 @@ struct Targets {
     depth_texture: wgpu::Texture,
     /// `depthtex1`, when a program after translucent terrain reads it.
     depth1: Option<(wgpu::Texture, wgpu::TextureView)>,
+    /// `depthtex2`, a separate snapshot before the hand, even without water.
+    depth2: Option<(wgpu::Texture, wgpu::TextureView)>,
     /// Both sides' mip chains of the buffers with mipmaps (`color` is their first level).
     mips: [Option<[Mips; 2]>; BUFFERS],
+}
+
+/// Capture a depth buffer at a render-order boundary, when the pack requested it.
+fn copy_depth_snapshot(
+    encoder: &mut wgpu::CommandEncoder,
+    depth: &wgpu::Texture,
+    snapshot: Option<&(wgpu::Texture, wgpu::TextureView)>,
+) {
+    if let Some((copy, _)) = snapshot {
+        encoder.copy_texture_to_texture(depth.as_image_copy(), copy.as_image_copy(), depth.size());
+    }
 }
 
 /// What a pack's gbuffers programs read and draw from the game's world.
@@ -279,6 +342,8 @@ pub struct PackPost {
     hand: Option<(Pass, super::pack_hand::PackHand)>,
     /// A program after translucent terrain reads `depthtex1`: it is copied before water.
     depth1: bool,
+    /// A program reads the pre-hand opaque depth snapshot (`depthtex2`).
+    depth2: bool,
     /// The shadow buffers, when the shadow pass runs (2.5), and the `shadowcomp` programs.
     shadow_targets: Option<super::pack_shadow::ShadowTargets>,
     /// What draws terrain from the light (`shadow`), and translucent terrain (`shadow_water`).
@@ -313,6 +378,8 @@ pub struct PackPost {
     targets: Option<Targets>,
     noise: wgpu::TextureView,
     dummy: wgpu::TextureView,
+    normal: wgpu::TextureView,
+    specular: wgpu::TextureView,
     /// The stand-in shadow map and its comparison sampler; cleared on the first frame.
     shadow: (wgpu::TextureView, wgpu::Sampler),
     shadow_cleared: bool,
@@ -402,11 +469,13 @@ fn source(name: &str, shadow_space: bool, shadow_pass: bool, watershadow: bool) 
     }
     match name {
         "depthtex0" | "gdepthtex" => Source::Depth,
-        // The hand is drawn after the pack, so `depthtex2` (without it) is `depthtex1`.
-        "depthtex1" | "depthtex2" => Source::Depth1,
+        "depthtex1" => Source::Depth1,
+        "depthtex2" => Source::Depth2,
         "noisetex" => Source::Noise,
         "texture" | "gtexture" | "tex" => Source::Atlas,
         "lightmap" => Source::Lightmap,
+        "normals" => Source::Normal,
+        "specular" => Source::Specular,
         n => horizon_shaders::buffer_index(n).map_or(Source::Dummy, Source::Color),
     }
 }
@@ -425,6 +494,25 @@ fn noise(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
     texture(device, queue, "Shader pack noisetex", 256, &texels)
 }
 
+/// Check the PNG header before the shared decoder allocates pixels. A custom
+/// noise image may be rectangular, but neither dimension may exceed 4096 or
+/// this device's texture limit.
+fn noise_image(bytes: &[u8], device_limit: u32) -> Result<(u32, u32, Vec<u8>), String> {
+    let header = bytes.get(..24).ok_or("truncated PNG header")?;
+    if header[..8] != *b"\x89PNG\r\n\x1a\n" || header[12..16] != *b"IHDR" {
+        return Err("expected a PNG image".into());
+    }
+    let width = u32::from_be_bytes(header[16..20].try_into().unwrap());
+    let height = u32::from_be_bytes(header[20..24].try_into().unwrap());
+    let limit = device_limit.min(4096);
+    if width == 0 || height == 0 || width > limit || height > limit {
+        return Err(format!(
+            "image {width}x{height} exceeds the 1..={limit} dimension limit"
+        ));
+    }
+    crate::hud::decode_bytes(bytes).map_err(|e| e.to_string())
+}
+
 fn texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -432,9 +520,20 @@ fn texture(
     side: u32,
     texels: &[u8],
 ) -> wgpu::TextureView {
+    texture_rect(device, queue, label, [side, side], texels)
+}
+
+fn texture_rect(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    dimensions: [u32; 2],
+    texels: &[u8],
+) -> wgpu::TextureView {
+    let [width, height] = dimensions;
     let size = wgpu::Extent3d {
-        width: side,
-        height: side,
+        width,
+        height,
         depth_or_array_layers: 1,
     };
     let tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -452,7 +551,7 @@ fn texture(
         texels,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(side * 4),
+            bytes_per_row: Some(width * 4),
             rows_per_image: None,
         },
         size,
@@ -689,6 +788,129 @@ pub(super) struct Geometry<'a> {
     pub cull: bool,
 }
 
+/// Buffers that can observe levels above zero. A pack's MipmapEnabled flag permits
+/// mipmaps; it does not make a base-level-only reader need a whole downsampling chain.
+/// Unknown levels and images stay conservative, including images passed to functions.
+fn mipmap_demand(module: &naga::Module, bindings: &[(u32, u16)], candidates: u16) -> u16 {
+    use naga::{Expression as E, ImageQuery as Q, Literal as L, SampleLevel as S};
+    fn zero(module: &naga::Module, expressions: &naga::Arena<E>, h: naga::Handle<E>) -> bool {
+        match expressions[h] {
+            E::Literal(L::F32(v)) => v == 0.0,
+            E::Literal(L::F64(v)) => v == 0.0,
+            E::Literal(L::I32(v)) => v == 0,
+            E::Literal(L::U32(v)) => v == 0,
+            E::ZeroValue(_) => true,
+            E::Constant(c) => zero(module, &module.global_expressions, module.constants[c].init),
+            _ => false,
+        }
+    }
+    let mut needed = 0;
+    for function in module
+        .functions
+        .iter()
+        .map(|(_, f)| f)
+        .chain(module.entry_points.iter().map(|e| &e.function))
+    {
+        let expressions = &function.expressions;
+        for (_, e) in expressions.iter() {
+            let image = match *e {
+                E::ImageSample { image, level, .. } => match level {
+                    S::Zero => continue,
+                    S::Exact(h) if zero(module, expressions, h) => continue,
+                    _ => image,
+                },
+                E::ImageLoad {
+                    image,
+                    level: Some(h),
+                    ..
+                } if !zero(module, expressions, h) => image,
+                E::ImageQuery { image, query } => match query {
+                    Q::NumLevels => image,
+                    Q::Size { level: Some(h) } if !zero(module, expressions, h) => image,
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            needed |= match expressions[image] {
+                E::GlobalVariable(g) => module.global_variables[g]
+                    .binding
+                    .as_ref()
+                    .and_then(|b| {
+                        bindings
+                            .iter()
+                            .find(|(binding, _)| b.group == 0 && *binding == b.binding)
+                    })
+                    .map_or(0, |(_, bit)| *bit),
+                _ => candidates,
+            };
+        }
+    }
+    needed & candidates
+}
+
+fn mipmap_generations(requested: u16, observed: u16, written: u16) -> u16 {
+    requested & (observed | !written)
+}
+
+/// Fragment depth outputs or writable storage can make draw order observable even when
+/// colour buffers do not overlap. Keep the original order for those unusual programs.
+fn fragment_reorder_safe(module: &naga::Module) -> bool {
+    fn depth(
+        module: &naga::Module,
+        ty: naga::Handle<naga::Type>,
+        binding: Option<&naga::Binding>,
+    ) -> bool {
+        if matches!(
+            binding,
+            Some(naga::Binding::BuiltIn(naga::BuiltIn::FragDepth))
+        ) {
+            return true;
+        }
+        match &module.types[ty].inner {
+            naga::TypeInner::Struct { members, .. } => members
+                .iter()
+                .any(|m| depth(module, m.ty, m.binding.as_ref())),
+            _ => false,
+        }
+    }
+    !module.entry_points.iter().any(|e| {
+        e.function
+            .result
+            .as_ref()
+            .is_some_and(|r| depth(module, r.ty, r.binding.as_ref()))
+    }) && !module.global_variables.iter().any(|(_, g)| {
+        matches!(g.space, naga::AddressSpace::WorkGroup)
+            || matches!(g.space, naga::AddressSpace::Storage { access } if access.intersects(naga::StorageAccess::STORE | naga::StorageAccess::ATOMIC))
+            || matches!(
+                module.types[g.ty].inner,
+                naga::TypeInner::Image {
+                    class: naga::ImageClass::Storage { access, .. },
+                    ..
+                } if access.intersects(naga::StorageAccess::STORE | naga::StorageAccess::ATOMIC)
+            )
+    })
+}
+
+/// Opaque terrain can cover the sky before its expensive fragment shader runs. Require
+/// every sky output to be overwritten by terrain, no cross-read and no terrain blending.
+/// Otherwise even a hidden sky value could be observed by a later deferred pass.
+fn sky_after_terrain_safe(
+    terrain_written: u16,
+    terrain_reads: u16,
+    terrain_unblended: bool,
+    terrain_fragment_safe: bool,
+    sky_written: u16,
+    sky_reads: u16,
+    sky_fragment_safe: bool,
+) -> bool {
+    terrain_unblended
+        && terrain_fragment_safe
+        && sky_fragment_safe
+        && sky_written & !terrain_written == 0
+        && terrain_reads & sky_written == 0
+        && sky_reads & terrain_written == 0
+}
+
 /// The pass of program `p`: a quad, or `geometry` drawn by the game. `None` (with a note) when
 /// wgpu refuses it or it writes nothing. `formats` are its buffers' (for a program of the shadow
 /// buffers, buffer n is shadowcolor n); `shadow` the shadowcolor formats when the shadow pass
@@ -705,6 +927,9 @@ fn build_pass(
     custom: &[String],
     draws: &wgpu::BindGroupLayout,
 ) -> Option<Pass> {
+    let fragment_reorder_safe =
+        fragment_reorder_safe(&p.program.fragment) && fragment_reorder_safe(&p.program.vertex);
+    let unblended = p.blend.is_none();
     let features = device.features();
     // The frame's uniforms, then the pack's custom ones.
     let index = |name: &str| {
@@ -743,7 +968,7 @@ fn build_pass(
             Source::Atlas => geometry.is_none(),
             Source::Depth => geometry.is_some(),
             // Translucent terrain reads the copy; opaque terrain would read itself.
-            Source::Depth1 => p.group == Group::Gbuffers,
+            Source::Depth1 | Source::Depth2 => p.group == Group::Gbuffers,
             Source::Color(n) => in_place & 1 << n != 0,
             _ => false,
         };
@@ -755,7 +980,7 @@ fn build_pass(
             Source::ShadowColor(n) => shadow
                 .and_then(|f| f[n].sample_type(None, Some(features)))
                 .unwrap_or(float),
-            Source::Depth | Source::Depth1 | Source::ShadowDepth(..) => {
+            Source::Depth | Source::Depth1 | Source::Depth2 | Source::ShadowDepth(..) => {
                 wgpu::TextureSampleType::Float { filterable: false }
             }
             // Unfilterable on WebGPU-level devices; the lightmap is sampled at texel centres.
@@ -816,6 +1041,16 @@ fn build_pass(
             sampler,
         });
     }
+    let mip_bindings: Vec<_> = samplers
+        .iter()
+        .filter_map(|s| match s.source {
+            Source::Color(n) => Some((s.binding, 1u16 << n)),
+            _ => None,
+        })
+        .collect();
+    let mipmaps = p.mipmaps
+        & (mipmap_demand(&p.program.vertex, &mip_bindings, p.mipmaps)
+            | mipmap_demand(&p.program.fragment, &mip_bindings, p.mipmaps));
     let final_pass = p.group == Group::Final;
     let mut targets = Vec::new();
     let mut writes = Vec::new();
@@ -848,6 +1083,10 @@ fn build_pass(
         return None;
     }
     let written = writes.iter().fold(0u16, |m, w| m | 1 << w.1);
+    // Skip only when this pass also rewrites that buffer. Its write immediately invalidates
+    // the chain, so no later stage can observe the skipped levels. A generation that survives
+    // this pass must remain: even an unflagged later reader may sample its higher levels.
+    let mipmaps = mipmap_generations(p.mipmaps, mipmaps, written);
     let kept = p
         .flips
         .iter()
@@ -946,6 +1185,8 @@ fn build_pass(
             .iter()
             .map(|u| (index(&u.name), u.ty.clone(), u.offset))
             .collect(),
+        fragment_reorder_safe,
+        unblended,
         name: p.name,
         group: p.group,
         pipeline,
@@ -956,7 +1197,8 @@ fn build_pass(
         reads,
         shadow_reads,
         written,
-        mipmaps: p.mipmaps,
+        mipmaps,
+        declared_mipmaps: p.mipmaps,
         draw,
         atlas: geometry.and_then(|g| g.atlas.clone()),
         ids: geometry.is_some_and(|g| g.ids.is_some()),
@@ -984,6 +1226,21 @@ impl PackPost {
             })
         });
         let mut notes = post.notes;
+        let noise_texture = post.noise_texture.as_deref().and_then(|bytes| {
+            match noise_image(bytes, device.limits().max_texture_dimension_2d) {
+                Ok((width, height, rgba)) => Some(texture_rect(
+                    device,
+                    queue,
+                    "Shader pack texture.noise",
+                    [width, height],
+                    &rgba,
+                )),
+                Err(error) => {
+                    notes.push(format!("texture.noise: {error}; using generated noise"));
+                    None
+                }
+            }
+        });
         notes.extend(post.config.notes);
         let shadow_config = post.config.shadow.clone();
         let mut custom = post.custom;
@@ -1247,6 +1504,12 @@ impl PackPost {
                 .chain(&water)
                 .chain(weather.iter().take(1).flatten())
                 .any(|p| p.samplers.iter().any(|s| s.source == Source::Depth1));
+        // Unlike depthtex1 this snapshot is needed even when no water program exists.
+        let depth2 = passes
+            .iter()
+            .chain(&water)
+            .chain(weather.iter().take(1).flatten())
+            .any(|p| p.samplers.iter().any(|s| s.source == Source::Depth2));
         let every_pass = || {
             (passes
                 .iter()
@@ -1321,7 +1584,7 @@ impl PackPost {
             || passes.iter().any(|p| {
                 p.samplers
                     .iter()
-                    .any(|s| matches!(s.source, Source::Depth | Source::Depth1))
+                    .any(|s| matches!(s.source, Source::Depth | Source::Depth1 | Source::Depth2))
             });
         let room = 8 - 1;
         let other_clears = cleared.split_off(room.min(cleared.len()));
@@ -1377,7 +1640,15 @@ impl PackPost {
             formats[b].sample_type(None, Some(device.features()))
                 == Some(wgpu::TextureSampleType::Float { filterable: true })
         };
-        let asked = passes.iter().fold(0u16, |m, p| m | p.mipmaps);
+        // Preserve the requested allocation and only elide generation whose unused chain
+        // is invalidated by the same pass's write (see build_pass).
+        for pass in &passes {
+            if pass.mipmaps != pass.declared_mipmaps {
+                notes.push(format!("{}: mipmap generation demand {:#x} -> {:#x} (base-level-only reads, overwritten by this pass)",
+                    pass.name, pass.declared_mipmaps, pass.mipmaps));
+            }
+        }
+        let asked = passes.iter().fold(0u16, |m, p| m | p.declared_mipmaps);
         let mipped = (0..BUFFERS)
             .filter(|&b| asked & 1 << b != 0 && filterable(b))
             .fold(0u16, |m, b| m | 1 << b);
@@ -1407,6 +1678,9 @@ impl PackPost {
             });
         }
         let white = [255u8; 4];
+        if defer_sky(terrain.as_ref(), sky.as_ref()) {
+            notes.push("sky draws after independent opaque terrain for depth rejection".into());
+        }
         Self {
             notes,
             passes,
@@ -1422,6 +1696,7 @@ impl PackPost {
             weather_generation: 0,
             hand,
             depth1,
+            depth2,
             shadow_targets,
             shadow_terrain,
             shadow_water,
@@ -1447,8 +1722,24 @@ impl PackPost {
             blit_group: None,
             main: 0,
             targets: None,
-            noise: noise(device, queue),
+            noise: noise_texture.unwrap_or_else(|| noise(device, queue)),
             dummy: texture(device, queue, "Shader pack stand-in", 1, &white),
+            // Shader-pack atlas defaults: flat normal, no smoothness/metal/emission.
+            // Public format: shaders.properties/current/reference/buffers/atlases/.
+            normal: texture(
+                device,
+                queue,
+                "Shader pack neutral normal",
+                1,
+                &[127, 127, 255, 255],
+            ),
+            specular: texture(
+                device,
+                queue,
+                "Shader pack neutral specular",
+                1,
+                &[0, 0, 0, 0],
+            ),
             shadow: (
                 device
                     .create_texture(&wgpu::TextureDescriptor {
@@ -1588,8 +1879,11 @@ impl PackPost {
                         }
                         _ => &targets.depth,
                     },
+                    Source::Depth2 => targets.depth2.as_ref().map_or(&targets.depth, |d| &d.1),
                     Source::Noise => &self.noise,
                     Source::Dummy => &self.dummy,
+                    Source::Normal => &self.normal,
+                    Source::Specular => &self.specular,
                     Source::Shadow => &self.shadow.0,
                     Source::Atlas => pass
                         .atlas
@@ -1923,6 +2217,11 @@ impl PackPost {
         }
     }
 
+    /// The final GL-row/window-depth target, for native overlays drawn after composites.
+    pub(super) fn world_depth(&self) -> Option<&wgpu::TextureView> {
+        self.targets.as_ref().map(|targets| &targets.depth)
+    }
+
     /// Whether the pack draws entities or block entities itself.
     pub fn has_entities(&self) -> bool {
         self.entities.is_some()
@@ -1938,12 +2237,22 @@ impl PackPost {
         frame: &super::Frame,
         terrain: &mut TerrainDraw<'_>,
     ) {
-        if super::sky_visible(frame) {
+        let sky_visible = super::sky_visible(frame);
+        let deferred_sky = defer_sky(self.terrain.as_ref(), self.sky.as_ref());
+        if sky_visible && !deferred_sky {
             self.draw_sky(device, queue, encoder, size, frame);
         }
         self.draw_terrain(device, queue, encoder, size, TerrainList::Solid, terrain);
+        if sky_visible && deferred_sky {
+            self.draw_sky(device, queue, encoder, size, frame);
+        }
         self.draw_entities(device, queue, encoder, size, false);
         self.draw_clouds(device, queue, encoder, size);
+        // Do this even if the hand is hidden or its program is absent: deferred and
+        // composite programs still need a fresh snapshot, not last frame's depth.
+        if let Some(targets) = &self.targets {
+            copy_depth_snapshot(encoder, &targets.depth_texture, targets.depth2.as_ref());
+        }
         self.draw_hand(device, queue, encoder, size, frame);
     }
 
@@ -2247,17 +2556,42 @@ impl PackPost {
             let view = t.create_view(&Default::default());
             (t, view)
         });
+        let depth2 = self.depth2.then(|| {
+            let t = texture("depthtex2", depth32, wgpu::TextureUsages::COPY_DST);
+            let view = t.create_view(&Default::default());
+            (t, view)
+        });
         self.targets = Some(Targets {
             size,
             color,
             depth: depth_texture.create_view(&Default::default()),
             depth_texture,
             depth1,
+            depth2,
             mips,
         });
-        let gbuffers = self.terrain.iter_mut().chain(&mut self.water);
-        for pass in self.passes.iter_mut().chain(gbuffers) {
+        // Every pass can retain views of the resized depth/colour targets, including
+        // weather reading depthtex2. Do not keep a bind group pointing at the old size.
+        for pass in self
+            .passes
+            .iter_mut()
+            .chain(self.terrain.iter_mut())
+            .chain(self.water.iter_mut())
+            .chain(self.clouds.iter_mut())
+            .chain(self.weather.iter_mut().flatten())
+            .chain(self.hand.iter_mut().map(|(pass, _)| pass))
+        {
             pass.groups.clear();
+        }
+        if let Some(sky) = &mut self.sky {
+            for pass in sky.basic.iter_mut().chain(&mut sky.textured) {
+                pass.groups.clear();
+            }
+        }
+        if let Some(entities) = &mut self.entities {
+            for pass in entities.passes.iter_mut().flatten() {
+                pass.groups.clear();
+            }
         }
     }
 
@@ -2494,7 +2828,8 @@ impl PackPost {
             && self.sky.is_none()
             && !self.entities.as_ref().is_some_and(Entities::drawn)
             && self.clouds.is_none()
-            && self.hand.is_none();
+            && self.hand.is_none()
+            && !self.depth2;
         let late_entities = self.entities.as_ref().is_some_and(|e| {
             e.passes
                 .iter()
@@ -2606,6 +2941,88 @@ mod tests {
     use super::*;
     use wgpu::TextureFormat as T;
 
+    #[test]
+    fn sky_reorder_requires_independent_fully_overwritten_outputs() {
+        let safe =
+            |tw, tr, blend, tf, sw, sr, sf| sky_after_terrain_safe(tw, tr, blend, tf, sw, sr, sf);
+        assert!(safe(0b111, 0b1000, true, true, 1, 0b10000, true));
+        assert!(!safe(0b110, 0, true, true, 1, 0, true));
+        assert!(!safe(0b111, 1, true, true, 1, 0, true));
+        assert!(!safe(0b111, 0, true, true, 1, 2, true));
+        assert!(!safe(0b111, 0, false, true, 1, 0, true));
+        assert!(!safe(0b111, 0, true, false, 1, 0, true));
+        assert!(!safe(0b111, 0, true, true, 1, 0, false));
+    }
+
+    #[test]
+    fn sky_reorder_rejects_fragment_depth_outputs() {
+        let normal = naga::front::wgsl::parse_str(
+            "@fragment fn main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }",
+        )
+        .unwrap();
+        assert!(fragment_reorder_safe(&normal));
+        let depth = naga::front::wgsl::parse_str("struct Out { @location(0) color: vec4<f32>, @builtin(frag_depth) depth: f32 }; @fragment fn main() -> Out { return Out(vec4<f32>(1.0), 0.5); }").unwrap();
+        assert!(!fragment_reorder_safe(&depth));
+    }
+
+    #[test]
+    fn base_level_generation_is_skipped_only_before_its_own_overwrite() {
+        // An unflagged later pass could still read higher levels: keep a surviving chain.
+        assert_eq!(mipmap_generations(0b11, 0, 0), 0b11);
+        // A full chain actually sampled by this pass is always required.
+        assert_eq!(mipmap_generations(0b11, 0b11, 0b11), 0b11);
+        // Only the unused chain invalidated by this pass's own write may disappear.
+        assert_eq!(mipmap_generations(0b11, 0b01, 0b11), 0b01);
+        assert_eq!(mipmap_generations(0b11, 0, 0b01), 0b10);
+        // Analysis must not enable generation that the pack never requested.
+        assert_eq!(mipmap_generations(0b01, 0b11, 0), 0b01);
+    }
+
+    #[test]
+    fn mipmap_demand_retains_implicit_dynamic_and_level_queries() {
+        let demand = |body: &str| {
+            let module = naga::front::wgsl::parse_str(&format!(
+                "@group(0) @binding(1) var a: texture_2d<f32>;\n\
+                 @group(0) @binding(2) var sa: sampler;\n\
+                 @fragment fn main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {{ {body} }}"
+            )).unwrap();
+            mipmap_demand(&module, &[(1, 4)], 4)
+        };
+        assert_eq!(demand("return textureSampleLevel(a, sa, p.xy, 0.0);"), 0);
+        assert_eq!(demand("return textureLoad(a, vec2<i32>(0), 0);"), 0);
+        assert_eq!(
+            demand("return vec4<f32>(f32(textureDimensions(a, 0).x));"),
+            0
+        );
+        assert_eq!(demand("return textureSample(a, sa, p.xy);"), 4);
+        assert_eq!(demand("return textureSampleLevel(a, sa, p.xy, 1.0);"), 4);
+        assert_eq!(demand("return textureSampleLevel(a, sa, p.xy, p.x);"), 4);
+        assert_eq!(demand("return textureLoad(a, vec2<i32>(0), 1);"), 4);
+        assert_eq!(demand("return vec4<f32>(f32(textureNumLevels(a)));"), 4);
+        assert_eq!(
+            demand("return vec4<f32>(f32(textureDimensions(a, 1).x));"),
+            4
+        );
+    }
+
+    #[test]
+    fn sky_reorder_allows_readonly_tables_but_rejects_storage_writes() {
+        let module = |access: &str| {
+            naga::front::wgsl::parse_str(&format!(
+            "@group(1) @binding(0) var<storage, {access}> table: array<u32>; @fragment fn main() -> @location(0) vec4<f32> {{ return vec4<f32>(f32(table[0])); }}"
+        )).unwrap()
+        };
+        assert!(fragment_reorder_safe(&module("read")));
+        assert!(!fragment_reorder_safe(&module("read_write")));
+        let image = |access: &str| {
+            naga::front::wgsl::parse_str(&format!(
+            "@group(1) @binding(0) var image: texture_storage_2d<rgba8unorm, {access}>; @fragment fn main() -> @location(0) vec4<f32> {{ return vec4<f32>(1.0); }}"
+        )).unwrap()
+        };
+        assert!(fragment_reorder_safe(&image("read")));
+        assert!(!fragment_reorder_safe(&image("write")));
+    }
+
     /// Two textures with a sampler each become two textures sharing one sampler variable.
     #[test]
     fn samplers_of_a_kind_share_one_variable() {
@@ -2684,12 +3101,161 @@ mod tests {
     }
 
     #[test]
+    fn noise_png_decodes_rectangles_and_rejects_bad_or_oversized_images() {
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 2, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer
+                .write_image_data(&[255, 0, 0, 255, 0, 255, 0, 255])
+                .unwrap();
+        }
+        assert_eq!(
+            noise_image(&png, 4096).unwrap(),
+            (2, 1, vec![255, 0, 0, 255, 0, 255, 0, 255])
+        );
+        assert!(
+            noise_image(&png, 1)
+                .unwrap_err()
+                .contains("dimension limit")
+        );
+        assert!(noise_image(b"not PNG", 4096).is_err());
+        let mut large = png.clone();
+        large[16..20].copy_from_slice(&4097u32.to_be_bytes());
+        assert!(
+            noise_image(&large, 8192)
+                .unwrap_err()
+                .contains("dimension limit")
+        );
+        assert!(noise_image(&png[..24], 4096).is_err());
+    }
+
+    /// A hand draw changes live depth but not the pre-hand snapshot; the next frame
+    /// replaces that snapshot even when there is no hand draw.
+    #[test]
+    fn pre_hand_depth_snapshot_is_separate_and_refreshed() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            assert!(
+                std::env::var_os("HORIZON_REQUIRE_GPU").is_none(),
+                "GPU adapter required for depth snapshot test"
+            );
+            eprintln!("depth snapshot GPU test skipped: no adapter");
+            return;
+        };
+        eprintln!(
+            "depth snapshot GPU test adapter: {}",
+            adapter.get_info().name
+        );
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let texture = |label, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: T::Depth32Float,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let depth = texture(
+            "live depth",
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        let copy = texture(
+            "pre-hand depth",
+            wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+        );
+        let snapshot = (copy.clone(), copy.create_view(&Default::default()));
+        let view = depth.create_view(&Default::default());
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("depth readback"),
+            size: 512,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let clear = |encoder: &mut wgpu::CommandEncoder, value| {
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("world or hand depth"),
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(value),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+        };
+        let read_pixel = |encoder: &mut wgpu::CommandEncoder, from: &wgpu::Texture, offset| {
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    aspect: wgpu::TextureAspect::DepthOnly,
+                    ..from.as_image_copy()
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &read,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset,
+                        bytes_per_row: Some(256),
+                        rows_per_image: None,
+                    },
+                },
+                from.size(),
+            );
+        };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        clear(&mut encoder, 0.75);
+        copy_depth_snapshot(&mut encoder, &depth, Some(&snapshot));
+        clear(&mut encoder, 0.1); // The hand is closer.
+        read_pixel(&mut encoder, &copy, 0);
+        read_pixel(&mut encoder, &depth, 256);
+        queue.submit([encoder.finish()]);
+        read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        {
+            let data = read.slice(..).get_mapped_range().unwrap();
+            let value = |at| f32::from_ne_bytes(data[at..at + 4].try_into().unwrap());
+            assert_eq!(value(0), 0.75);
+            assert!((value(256) - 0.1).abs() < 1e-6);
+        }
+        read.unmap();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        clear(&mut encoder, 0.5); // Next frame, no hand.
+        copy_depth_snapshot(&mut encoder, &depth, Some(&snapshot));
+        copy_depth_snapshot(&mut encoder, &depth, None); // Unrequested: no-op.
+        read_pixel(&mut encoder, &copy, 0);
+        queue.submit([encoder.finish()]);
+        read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let data = read.slice(..).get_mapped_range().unwrap();
+        assert_eq!(f32::from_ne_bytes(data[0..4].try_into().unwrap()), 0.5);
+    }
+
+    #[test]
     fn sampler_names() {
         let main = |n| source(n, false, false, false);
         assert!(main("gaux1") == Source::Color(4));
         assert!(main("gdepthtex") == Source::Depth);
-        assert!(main("depthtex2") == Source::Depth1);
+        assert!(main("depthtex1") == Source::Depth1);
+        assert!(main("depthtex2") == Source::Depth2);
         assert!(main("noisetex") == Source::Noise);
+        assert!(main("normals") == Source::Normal);
+        assert!(main("specular") == Source::Specular);
+        for source in [Source::Normal, Source::Specular] {
+            assert!(SamplerKind::of(source, true) == SamplerKind::Linear);
+            assert!(SamplerKind::of(source, false) == SamplerKind::Nearest);
+        }
         // Without the shadow pass, the shadow buffers are stand-ins.
         assert!(main("shadowcolor0") == Source::Dummy);
         assert!(main("shadowtex0") == Source::Dummy);

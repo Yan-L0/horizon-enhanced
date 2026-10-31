@@ -310,6 +310,27 @@ impl Game<'_> {
         }
     }
 
+    /// Shader-pack flash position in world axes, at the same distance/pose as the
+    /// sky sprite. The renderer rotates it into view space with the other lights.
+    pub(super) fn shader_end_flash(&self, partial: f32) -> (f32, [f32; 3]) {
+        if self.dim != Dim::End {
+            return (0.0, [0.0, 100.0, 0.0]);
+        }
+        let flash = &self.end.flash;
+        let pose = glam::Mat4::from_rotation_y((180.0 - flash.y_angle).to_radians())
+            * glam::Mat4::from_rotation_x((-90.0 - flash.x_angle).to_radians());
+        let intensity = if self.settings.file.bool("hideLightningFlashes") {
+            0.0
+        } else {
+            flash.intensity(partial)
+        };
+        (
+            intensity,
+            pose.transform_vector3(glam::Vec3::new(0.0, 100.0, 0.0))
+                .to_array(),
+        )
+    }
+
     /// SkyRenderer.renderEndFlash, drawn after the renderer's resident sky mesh.
     pub(super) fn end_flash_geometry(&self) -> Vec<Vertex> {
         let mut out = Vec::new();

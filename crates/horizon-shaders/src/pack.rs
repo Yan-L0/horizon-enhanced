@@ -119,6 +119,37 @@ impl Pack {
         }
     }
 
+    /// Reads at most `limit` bytes, rejecting larger files before allocating their
+    /// declared length. Used for optional binary assets from shader packs.
+    pub fn read_limited(&self, path: &str, limit: usize) -> Option<Vec<u8>> {
+        let path = normalize(path)?;
+        let read = |reader: &mut dyn Read| {
+            let mut bytes = Vec::new();
+            reader
+                .take(limit.saturating_add(1) as u64)
+                .read_to_end(&mut bytes)
+                .ok()?;
+            (bytes.len() <= limit).then_some(bytes)
+        };
+        match &self.files {
+            Files::Folder(root) => {
+                let mut file = fs::File::open(root.join(&path)).ok()?;
+                if file.metadata().ok()?.len() > limit as u64 {
+                    return None;
+                }
+                read(&mut file)
+            }
+            Files::Zip { archive, entries } => {
+                let mut archive = archive.clone();
+                let mut entry = archive.by_index(*entries.get(&path)?).ok()?;
+                if entry.size() > limit as u64 {
+                    return None;
+                }
+                read(&mut entry)
+            }
+        }
+    }
+
     /// A text file, decoded as UTF-8 (invalid bytes replaced) without its byte-order mark.
     pub fn read_text(&self, path: &str) -> Option<String> {
         let bytes = self.read(path)?;
@@ -261,6 +292,22 @@ pub(crate) mod tests {
         assert!(!pack.exists("License.txt"));
         assert_eq!(pack.list("lang"), ["en_US.lang", "fr_FR.lang"]);
         assert_eq!(pack.list(""), ["shaders.properties"]);
+    }
+
+    #[test]
+    fn binary_reads_enforce_limits_for_folders_and_archives() {
+        let pack =
+            Pack::from_zip_bytes("noise.zip", zip(&[("shaders/tex/noise.png", "12345")])).unwrap();
+        assert_eq!(pack.read_limited("tex/noise.png", 5).unwrap(), b"12345");
+        assert!(pack.read_limited("tex/noise.png", 4).is_none());
+        assert!(pack.read_limited("../outside", 100).is_none());
+        let dir = temp_dir("limited-read");
+        fs::create_dir_all(dir.join("shaders/tex")).unwrap();
+        fs::write(dir.join("shaders/tex/noise.png"), b"12345").unwrap();
+        let pack = Pack::open(&dir).unwrap();
+        assert_eq!(pack.read_limited("tex/noise.png", 5).unwrap(), b"12345");
+        assert!(pack.read_limited("tex/noise.png", 4).is_none());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

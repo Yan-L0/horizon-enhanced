@@ -87,6 +87,7 @@ mod pack_atlas;
 pub mod pack_draw;
 mod pack_entities;
 mod pack_hand;
+mod pack_overlay;
 mod pack_post;
 mod pack_shadow;
 mod pack_sky;
@@ -505,6 +506,7 @@ pub struct Renderer {
     instances: wgpu::Buffer,
     instance_capacity: u64,
     outline: wgpu::Buffer,
+    pack_overlay_depth: Option<pack_overlay::DepthTransfer>,
     depth: wgpu::TextureView,
     sections: resident::Resident<SectionGpu>,
     lods: HashMap<crate::lod::TileKey, lod::Tile>,
@@ -2791,6 +2793,7 @@ impl Renderer {
             instances,
             instance_capacity,
             outline,
+            pack_overlay_depth: None,
             depth,
             sections: resident::Resident::default(),
             lods: HashMap::new(),
@@ -4817,6 +4820,10 @@ impl Renderer {
                 .as_ref()
                 .and_then(|p| p.1.as_ref())
                 .is_some_and(|p| p.has_weather());
+        // Native interaction overlays must follow a GLSL pack's final composition. Drawing
+        // them into the initial world lets its gbuffers overwrite the crack and recolour the
+        // selection stroke (BSL's grading can turn the dark native stroke bright).
+        let pack_native_overlays = pack_post && !frame.title;
         let scaled = self.world_post.prepare(
             &self.device,
             [self.config.width, self.config.height],
@@ -5088,7 +5095,7 @@ impl Renderer {
                 self.weather.draw(&mut pass, &self.entity_group);
             }
             pass.set_bind_group(0, &self.group, &[]);
-            if crumbling_quads > 0 {
+            if crumbling_quads > 0 && !pack_native_overlays {
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -5157,7 +5164,7 @@ impl Renderer {
                 pass.draw_indexed(0..additive_quads * 6, (world_quads * 4) as i32, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if outline_edges > 0 && !frame.outline_after_terrain {
+            if outline_edges > 0 && !frame.outline_after_terrain && !pack_native_overlays {
                 self.draw_outline(&mut pass, outline_edges as u32, frame.outline_high_contrast);
             }
             if debug_depth > 0 {
@@ -5213,7 +5220,7 @@ impl Renderer {
             }
             // LevelRenderer.executeClassicTransparency: translucent targets'
             // outlines follow terrain, so its blending cannot wash them out.
-            if outline_edges > 0 && frame.outline_after_terrain {
+            if outline_edges > 0 && frame.outline_after_terrain && !pack_native_overlays {
                 self.draw_outline(&mut pass, outline_edges as u32, frame.outline_high_contrast);
             }
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -5229,7 +5236,7 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if translucent_crumbling_quads > 0 {
+            if translucent_crumbling_quads > 0 && !pack_native_overlays {
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -5365,6 +5372,60 @@ impl Renderer {
         } else if scaled.is_some() {
             self.world_post
                 .finish(&self.queue, &mut encoder, &view_target);
+        }
+        if pack_native_overlays
+            && (outline_edges > 0 || crumbling_quads + translucent_crumbling_quads > 0)
+            && let Some(depth) = self
+                .pack_post
+                .as_ref()
+                .and_then(|(_, post)| post.as_ref())
+                .and_then(pack_post::PackPost::world_depth)
+                .cloned()
+        {
+            // The initial native target has no terrain depth when the pack owns gbuffers.
+            // Recover its final depth at full window resolution before depth-testing overlays.
+            self.pack_overlay_depth
+                .get_or_insert_with(|| pack_overlay::DepthTransfer::new(&self.device))
+                .restore(&self.device, &mut encoder, &depth, &self.depth);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Block interaction overlays after shader pack"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view_target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_bind_group(0, &self.group, &[]);
+            let cracks = crumbling_quads + translucent_crumbling_quads;
+            if cracks > 0 {
+                // Keep vanilla's multiply blend, not alpha painting over the lit block.
+                pass.set_pipeline(&self.crumbling_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..cracks * 6,
+                    ((entity_quads + text_quads) * 4) as i32,
+                    0..1,
+                );
+                pass.set_bind_group(0, &self.group, &[]);
+            }
+            if outline_edges > 0 {
+                self.draw_outline(&mut pass, outline_edges as u32, frame.outline_high_contrast);
+            }
         }
         if let Some(hdr) = &self.hdr {
             hdr.keep_world(&mut encoder);

@@ -151,6 +151,34 @@ fn disc(y: f32, kind: u32, out: &mut Vec<Vertex>) {
     }
 }
 
+/// Close the primary sky around the camera. The original Y=16, radius=512
+/// disc leaves both its lowest 1.79 degrees and the lower hemisphere uncovered.
+/// A procedural sky must paint those rays too, or the original world fog colour
+/// leaks through at the horizon and above terrain that ends in the distance.
+/// The later VOID draw remains separate and can overwrite the lower sky.
+fn sky_geometry(out: &mut Vec<Vertex>) {
+    disc(16.0, SKY, out);
+    let rim = |angle: i32, y| {
+        let a = (angle as f32).to_radians();
+        Vertex {
+            pos: [512.0 * a.cos(), y, 512.0 * a.sin()],
+            kind: SKY,
+        }
+    };
+    for angle in (-180..180).step_by(45) {
+        let [upper_a, upper_b] = [rim(angle, 16.0), rim(angle + 45, 16.0)];
+        let [lower_a, lower_b] = [rim(angle, 0.0), rim(angle + 45, 0.0)];
+        // Sky pipelines do not cull faces; both triangles keep the disc's
+        // inward-facing winding for renderers that inspect front_facing.
+        out.extend([upper_a, lower_a, lower_b, upper_a, lower_b, upper_b]);
+        let pole = Vertex {
+            pos: [0.0, -512.0, 0.0],
+            kind: SKY,
+        };
+        out.extend([lower_a, pole, lower_b]);
+    }
+}
+
 pub(super) struct PackSky {
     vertices: wgpu::Buffer,
     celestial: wgpu::Buffer,
@@ -164,7 +192,7 @@ pub(super) struct PackSky {
 impl PackSky {
     pub fn new(device: &wgpu::Device) -> Self {
         let mut v = Vec::new();
-        disc(16.0, SKY, &mut v);
+        sky_geometry(&mut v);
         let sky = 0..v.len() as u32;
         let apex = Vertex {
             pos: [0.0; 3],
@@ -318,6 +346,52 @@ impl PackSky {
         } else {
             pass.set_bind_group(1, &self.group, &[]);
             pass.set_vertex_buffer(0, self.vertices.slice(..));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::Vec3;
+
+    fn ray_hits(ray: Vec3, triangle: &[Vertex]) -> bool {
+        let [a, b, c] = std::array::from_fn::<_, 3, _>(|i| Vec3::from(triangle[i].pos));
+        let e1 = b - a;
+        let e2 = c - a;
+        let p = ray.cross(e2);
+        let det = e1.dot(p);
+        if det.abs() < 1e-6 {
+            return false;
+        }
+        let t = -a;
+        let u = t.dot(p) / det;
+        let q = t.cross(e1);
+        let v = ray.dot(q) / det;
+        u >= -1e-5 && v >= -1e-5 && u + v <= 1.00001 && e2.dot(q) / det > 0.0
+    }
+
+    #[test]
+    fn sky_covers_both_hemispheres_and_the_horizon() {
+        let mut vertices = Vec::new();
+        sky_geometry(&mut vertices);
+        assert!(vertices.iter().all(|v| v.kind == SKY));
+        assert!(vertices.iter().any(|v| v.pos[1] == 0.0));
+        // The original disc missed the near-horizon and lower rays. Cover
+        // every azimuth, both hemispheres, and the skirt/cap boundary itself.
+        for azimuth in (-180..180).step_by(5) {
+            let a = (azimuth as f32).to_radians();
+            for elevation in [
+                -89.0f32, -45.0, -2.0, -1.79, -1.5, -0.8, -0.2, -0.01, 0.0, 0.01, 0.2, 0.8, 1.5,
+                1.79, 2.0, 45.0, 89.0,
+            ] {
+                let e = elevation.to_radians();
+                let ray = Vec3::new(a.cos() * e.cos(), e.sin(), a.sin() * e.cos());
+                assert!(
+                    vertices.chunks_exact(3).any(|t| ray_hits(ray, t)),
+                    "uncovered sky direction: azimuth {azimuth}, elevation {elevation}"
+                );
+            }
         }
     }
 }

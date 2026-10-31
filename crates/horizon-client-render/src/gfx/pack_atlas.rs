@@ -215,7 +215,13 @@ impl PackAtlas {
                 .map(|&(n, v)| (n.to_owned(), v.to_owned()))
                 .collect(),
             after: String::new(),
-            alpha_test: None,
+            // Legacy shader packs rely on the host's alpha cutout. Without it,
+            // transparent plant/fire texels write opaque colour and depth, turning
+            // their crossed quads into the apparent giant rectangular curtains.
+            alpha_test: Some(horizon_shaders::AlphaTest {
+                op: ">",
+                reference: 0.1,
+            }),
         }
     }
 }
@@ -265,6 +271,16 @@ mod tests {
         let mut encoder = device.create_command_encoder(&Default::default());
         let atlas = PackAtlas::new(&device, &mut encoder, &arrays, split, layers, sprite).unwrap();
         assert_eq!((atlas.columns, atlas.size()), (3, [6, 4]));
+        // Both geometry backends need the same transparent-texel rejection.
+        for flat in [false, true] {
+            assert_eq!(
+                atlas.terrain_inputs(flat).alpha_test,
+                Some(horizon_shaders::AlphaTest {
+                    op: ">",
+                    reference: 0.1
+                })
+            );
+        }
         let read = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: 256 * 4,

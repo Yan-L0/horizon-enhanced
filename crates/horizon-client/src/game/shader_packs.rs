@@ -181,6 +181,25 @@ impl Game<'_> {
             rainfall: info.map_or(0.0, |b| b.downfall),
             held_items,
             held_light,
+            relative_eye: self.player.as_ref().map_or([0.0; 3], |player| {
+                // Match the camera's interpolation, rather than subtracting the latest tick's
+                // head position (which makes first-person water effects wobble while walking).
+                let t = self.clock.camera_fraction();
+                let old = self.previous_position;
+                let pos = player.position;
+                let eye = f64::from(self.view.eye_height_old)
+                    + f64::from(self.view.eye_height - self.view.eye_height_old) * t;
+                let head = glam::DVec3::new(
+                    old.x + (pos.x - old.x) * t,
+                    old.y + (pos.y - old.y) * t + eye,
+                    old.z + (pos.z - old.z) * t,
+                );
+                (camera - head).as_vec3().to_array()
+            }),
+            cloud_height: 192.33,
+            bedrock_level: self.world.bottom_y(),
+            right_handed: !self.settings.main_hand_left,
+            end_flash: self.shader_end_flash(partial),
         }
     }
 
