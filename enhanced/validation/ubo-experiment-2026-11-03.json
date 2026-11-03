@@ -1,0 +1,385 @@
+{
+  "baseline_commit": "c663bd731f50c5e74570af2b00786f2d0cb5df9a",
+  "gpu": "Apple M2",
+  "backend": "Metal",
+  "profile": "BSL Quality r2 v10.1.8",
+  "physical_window": [
+    3420,
+    1954
+  ],
+  "resolution_scale_percent": 75,
+  "render_distance_chunks": 6,
+  "samples_per_scene": 3,
+  "sample_seconds": 8,
+  "warmup_seconds": 30,
+  "runs": {
+    "ubo-baseline": {
+      "cave": {
+        "fps": [
+          54.9819,
+          55.8754,
+          56.1498
+        ],
+        "median_fps": 55.8754,
+        "frame_p50_ms": [
+          18.2233,
+          18.1789,
+          18.0953
+        ],
+        "frame_p95_ms": [
+          19.6539,
+          18.9028,
+          18.7582
+        ],
+        "cpu_p50_ms": [
+          2.6519,
+          2.7925,
+          2.282
+        ],
+        "gpu_p50_ms": [
+          18.1678,
+          18.1417,
+          18.0698
+        ],
+        "camera_stable": true
+      },
+      "outdoor": {
+        "fps": [
+          47.0716,
+          45.4789,
+          49.0101
+        ],
+        "median_fps": 47.0716,
+        "frame_p50_ms": [
+          19.767,
+          19.7903,
+          19.7319
+        ],
+        "frame_p95_ms": [
+          30.746,
+          30.0535,
+          29.129
+        ],
+        "cpu_p50_ms": [
+          11.8605,
+          9.4133,
+          10.4352
+        ],
+        "gpu_p50_ms": [
+          19.7225,
+          19.664,
+          19.6103
+        ],
+        "camera_stable": true
+      }
+    },
+    "ubo-after": {
+      "cave": {
+        "fps": [
+          55.9964,
+          55.0413,
+          52.6525
+        ],
+        "median_fps": 55.0413,
+        "frame_p50_ms": [
+          18.1515,
+          18.4702,
+          18.6388
+        ],
+        "frame_p95_ms": [
+          18.7408,
+          19.0559,
+          23.8618
+        ],
+        "cpu_p50_ms": [
+          2.6265,
+          2.395,
+          2.9701
+        ],
+        "gpu_p50_ms": [
+          18.1303,
+          18.413,
+          18.5924
+        ],
+        "camera_stable": true
+      },
+      "outdoor": {
+        "fps": [
+          41.555,
+          41.0147,
+          42.0714
+        ],
+        "median_fps": 41.555,
+        "frame_p50_ms": [
+          23.7327,
+          23.9674,
+          23.515
+        ],
+        "frame_p95_ms": [
+          33.0938,
+          32.883,
+          31.8354
+        ],
+        "cpu_p50_ms": [
+          13.092,
+          13.0557,
+          9.4445
+        ],
+        "gpu_p50_ms": [
+          23.0337,
+          23.6255,
+          23.3548
+        ],
+        "camera_stable": true
+      }
+    },
+    "ubo-baseline-repeat": {
+      "cave": {
+        "fps": [
+          56.2365,
+          56.4571,
+          58.5718
+        ],
+        "median_fps": 56.4571,
+        "frame_p50_ms": [
+          17.1645,
+          17.1715,
+          16.9995
+        ],
+        "frame_p95_ms": [
+          19.8056,
+          19.5028,
+          17.6128
+        ],
+        "cpu_p50_ms": [
+          2.6352,
+          2.7697,
+          2.634
+        ],
+        "gpu_p50_ms": [
+          17.0557,
+          17.0947,
+          16.9674
+        ],
+        "camera_stable": true
+      },
+      "outdoor": {
+        "fps": [
+          11.6827,
+          10.3761,
+          37.999
+        ],
+        "median_fps": 11.6827,
+        "frame_p50_ms": [
+          21.9925,
+          97.5047,
+          18.8294
+        ],
+        "frame_p95_ms": [
+          201.8623,
+          176.0495,
+          49.4458
+        ],
+        "cpu_p50_ms": [
+          14.1657,
+          90.338,
+          15.1114
+        ],
+        "gpu_p50_ms": [
+          21.7592,
+          38.6796,
+          18.3621
+        ],
+        "camera_stable": true
+      }
+    },
+    "ubo-after-repeat": {
+      "cave": {
+        "fps": [
+          50.562,
+          52.1078,
+          50.4384
+        ],
+        "median_fps": 50.562,
+        "frame_p50_ms": [
+          19.7358,
+          18.6956,
+          18.9851
+        ],
+        "frame_p95_ms": [
+          22.1147,
+          21.9927,
+          28.2008
+        ],
+        "cpu_p50_ms": [
+          2.791,
+          2.8365,
+          7.9639
+        ],
+        "gpu_p50_ms": [
+          19.6257,
+          18.6833,
+          19.184
+        ],
+        "camera_stable": true
+      },
+      "outdoor": {
+        "fps": [
+          50.4871,
+          43.7251,
+          34.3988
+        ],
+        "median_fps": 43.7251,
+        "frame_p50_ms": [
+          19.232,
+          22.8193,
+          27.2125
+        ],
+        "frame_p95_ms": [
+          28.0179,
+          31.572,
+          37.627
+        ],
+        "cpu_p50_ms": [
+          12.5208,
+          12.7294,
+          9.8664
+        ],
+        "gpu_p50_ms": [
+          18.825,
+          21.9614,
+          26.3768
+        ],
+        "camera_stable": true
+      }
+    }
+  },
+  "conclusion": "No demonstrated FPS improvement; candidate preserved as an experiment, not enabled on main.",
+  "uniform_members": [
+    {
+      "program": "gbuffers_terrain",
+      "active": 29,
+      "declared": 41
+    },
+    {
+      "program": "gbuffers_water",
+      "active": 33,
+      "declared": 46
+    },
+    {
+      "program": "shadow",
+      "active": 7,
+      "declared": 16
+    },
+    {
+      "program": "shadow",
+      "active": 7,
+      "declared": 16
+    },
+    {
+      "program": "gbuffers_skybasic",
+      "active": 24,
+      "declared": 34
+    },
+    {
+      "program": "gbuffers_skytextured",
+      "active": 20,
+      "declared": 27
+    },
+    {
+      "program": "gbuffers_entities",
+      "active": 29,
+      "declared": 40
+    },
+    {
+      "program": "gbuffers_block",
+      "active": 29,
+      "declared": 41
+    },
+    {
+      "program": "gbuffers_entities_translucent",
+      "active": 32,
+      "declared": 43
+    },
+    {
+      "program": "gbuffers_textured",
+      "active": 32,
+      "declared": 43
+    },
+    {
+      "program": "gbuffers_hand",
+      "active": 31,
+      "declared": 43
+    },
+    {
+      "program": "gbuffers_weather",
+      "active": 23,
+      "declared": 32
+    },
+    {
+      "program": "gbuffers_clouds",
+      "active": 21,
+      "declared": 28
+    },
+    {
+      "program": "deferred",
+      "active": 8,
+      "declared": 12
+    },
+    {
+      "program": "deferred1",
+      "active": 25,
+      "declared": 37
+    },
+    {
+      "program": "composite",
+      "active": 27,
+      "declared": 39
+    },
+    {
+      "program": "composite1",
+      "active": 5,
+      "declared": 16
+    },
+    {
+      "program": "composite4",
+      "active": 3,
+      "declared": 7
+    },
+    {
+      "program": "composite5",
+      "active": 24,
+      "declared": 28
+    },
+    {
+      "program": "composite6",
+      "active": 2,
+      "declared": 7
+    },
+    {
+      "program": "composite7",
+      "active": 8,
+      "declared": 13
+    },
+    {
+      "program": "final",
+      "active": 2,
+      "declared": 7
+    }
+  ],
+  "tests": {
+    "shader_library": 51,
+    "renderer_pack": 33,
+    "gpu_identical_pixel_test": true,
+    "windows_x64_compiled": true,
+    "native_windows_gpu_tested": false
+  },
+  "gemini": {
+    "model": "gemini-3.5-flash-lite",
+    "calls": 2,
+    "input_tokens": 74281,
+    "output_tokens": 2461,
+    "total_tokens": 76742,
+    "accepted_proposals": 0
+  }
+}

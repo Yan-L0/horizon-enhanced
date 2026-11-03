@@ -1,5 +1,7 @@
 # Development milestones
 
+- **November 2–3 renderer audit:** reproducible isolated shader-pack comparison tool, two documented Gemini consultations and repeated M2 timings. Active-uniform upload experiment passed 84 tests but did not demonstrate an FPS gain; preserved in `perf/ubo-upload-experiment` and kept out of the stable renderer. See `enhanced/validation/gemini-render-audit-2026-11-02.md`.
+
 - **Windows 0.4.1:** native multi-draw now supplies shader-pack material IDs and reconstructed face normals/tangents, matching the flat path. Previously BSL received `mc_Entity=-1` on the usual Windows path and could not identify water. Native draw batching is preserved. All 29 renderer pack tests passed on M2/Metal, including a GPU regression for both geometry paths with nonzero vertex/instance offsets. Native Windows visual confirmation remains pending.
 
 All dates are local project dates, October 2026. This Git history starts with a pinned upstream snapshot and imports the completed work honestly; it does not invent historical source commits for earlier binaries.
