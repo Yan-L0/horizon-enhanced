@@ -11,7 +11,7 @@
 //! Pack buffers store rows as GL does (row 0 at the bottom: the translator negates clip y), so
 //! the world is copied in upside down, and its reverse-Z depth becomes GL window depth.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use horizon_shaders::{Format, Group, Kind, Post, Val};
 
@@ -216,6 +216,10 @@ struct Pass {
     layout: wgpu::BindGroupLayout,
     ubo: wgpu::Buffer,
     block: Vec<u8>,
+    /// Last submitted UBO bytes; capacity is reused across frames.
+    uploaded: Vec<u8>,
+    /// Active host vec4 slots (target, fog colour, fog parameters).
+    header_mask: u8,
     /// (index into `pack_uniforms::NAMES`, declared type, offset).
     uniforms: Vec<(Option<usize>, String, u32)>,
     samplers: Vec<Binding>,
@@ -911,6 +915,85 @@ fn sky_after_terrain_safe(
         && sky_reads & terrain_written == 0
 }
 
+/// Offsets of complete UBO members that may be observed. Every root-pointer use must
+/// be a statically indexed member access. Unknown use or failed validation retains all
+/// members; nested arrays/matrices retain their entire enclosing member.
+fn active_uniform_offsets(module: &naga::Module) -> Option<HashSet<u32>> {
+    use naga::Expression as E;
+    let info = naga::valid::Validator::new(Default::default(), naga::valid::Capabilities::all())
+        .validate(module)
+        .ok()?;
+    let mut active = HashSet::new();
+    for (global, var) in module.global_variables.iter() {
+        if var.space != naga::AddressSpace::Uniform
+            || !var
+                .binding
+                .as_ref()
+                .is_some_and(|b| b.group == 0 && b.binding == 0)
+        {
+            continue;
+        }
+        let naga::TypeInner::Struct { members, .. } = &module.types[var.ty].inner else {
+            return None;
+        };
+        for (function, uses) in module.functions.iter().map(|(h, f)| (f, &info[h])).chain(
+            module
+                .entry_points
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (&e.function, info.get_entry_point(i))),
+        ) {
+            let mut indexed = HashMap::new();
+            for (access, expr) in function.expressions.iter() {
+                if let E::AccessIndex { base, index } = *expr
+                    && matches!(function.expressions[base], E::GlobalVariable(g) if g == global)
+                {
+                    let offset = members.get(index as usize)?.offset;
+                    // GLSL frontends may retain unused member-pointer expressions for declarations.
+                    // They observe no bytes until a load, nested access or statement refers to them.
+                    if uses[access].ref_count != 0 {
+                        active.insert(offset);
+                    }
+                    *indexed.entry(base).or_insert(0usize) += 1;
+                }
+            }
+            for (root, expr) in function.expressions.iter() {
+                if matches!(expr, E::GlobalVariable(g) if *g == global)
+                    && indexed.get(&root).copied().unwrap_or(0) != uses[root].ref_count
+                {
+                    // Includes statement uses (e.g. call arguments), not just expressions.
+                    return None;
+                }
+            }
+        }
+    }
+    Some(active)
+}
+
+/// Keep inactive header bytes zero just like inactive pack members. The layout is fixed.
+fn write_uniform_header(block: &mut [u8], header: &[[f32; 4]; 3], mask: u8) {
+    for (slot, value) in header.iter().enumerate() {
+        if mask & (1 << slot) != 0 {
+            let at = slot * 16;
+            let bytes: &[u8] = bytemuck::bytes_of(value);
+            if let Some(dst) = block.get_mut(at..(at + 16)) {
+                dst.copy_from_slice(bytes);
+            }
+        }
+    }
+}
+
+/// Exact byte comparison includes the host header and uses no new allocation after warmup.
+fn uniforms_changed(previous: &mut Vec<u8>, next: &[u8]) -> bool {
+    if previous.as_slice() == next {
+        false
+    } else {
+        previous.clear();
+        previous.extend_from_slice(next);
+        true
+    }
+}
+
 /// The pass of program `p`: a quad, or `geometry` drawn by the game. `None` (with a note) when
 /// wgpu refuses it or it writes nothing. `formats` are its buffers' (for a program of the shadow
 /// buffers, buffer n is shadowcolor n); `shadow` the shadowcolor formats when the shadow pass
@@ -939,8 +1022,26 @@ fn build_pass(
         })
     };
     let mask = |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
+    let active_uniforms = active_uniform_offsets(&p.program.vertex)
+        .zip(active_uniform_offsets(&p.program.fragment))
+        .map(|(mut vertex, fragment)| {
+            vertex.extend(fragment);
+            vertex
+        });
     let interface = &p.program.interface;
     let draw = interface.draw;
+    notes.push(format!(
+        "{}: active uniform members {}/{}; inactive host fields retained as zero, identical uploads cached",
+        p.name,
+        interface
+            .uniforms
+            .iter()
+            .filter(|u| active_uniforms
+                .as_ref()
+                .is_none_or(|active| active.contains(&u.offset)))
+            .count(),
+        interface.uniforms.len()
+    ));
     let mut entries = vec![entry(
         0,
         wgpu::BindingType::Buffer {
@@ -1180,9 +1281,25 @@ fn build_pass(
             mapped_at_creation: false,
         }),
         block: vec![0; interface.uniform_size as usize],
+        uploaded: Vec::new(),
+        header_mask: (0..3).fold(0, |mask, slot| {
+            mask | if active_uniforms
+                .as_ref()
+                .is_none_or(|active| active.contains(&(slot * 16)))
+            {
+                1 << slot
+            } else {
+                0
+            }
+        }),
         uniforms: interface
             .uniforms
             .iter()
+            .filter(|u| {
+                active_uniforms
+                    .as_ref()
+                    .is_none_or(|active| active.contains(&u.offset))
+            })
             .map(|u| (index(&u.name), u.ty.clone(), u.offset))
             .collect(),
         fragment_reorder_safe,
@@ -1808,15 +1925,13 @@ impl PackPost {
             fog[0].to_array(),
             fog[1].to_array(),
         ];
-        let head: &[u8] = bytemuck::cast_slice(&ours);
-        let n = head.len().min(pass.block.len());
-        pass.block[..n].copy_from_slice(&head[..n]);
+        write_uniform_header(&mut pass.block, &ours, pass.header_mask);
         for (index, ty, offset) in &pass.uniforms {
             if let Some(v) = index.and_then(|i| self.uniforms.values.get(i)) {
                 v.write(ty, &mut pass.block, *offset as usize);
             }
         }
-        if !pass.block.is_empty() {
+        if !pass.block.is_empty() && uniforms_changed(&mut pass.uploaded, &pass.block) {
             queue.write_buffer(&pass.ubo, 0, &pass.block);
         }
         let targets = self.targets.as_ref().expect("resized");
@@ -2939,6 +3054,286 @@ impl PackPost {
 mod tests {
     use super::*;
     use wgpu::TextureFormat as T;
+
+    #[test]
+    fn inactive_host_fog_does_not_invalidate_but_live_target_does() {
+        let module = naga::front::wgsl::parse_str("struct U { target_size: vec4<f32>, fog_color: vec4<f32>, fog: vec4<f32> }; @group(0) @binding(0) var<uniform> u: U; @fragment fn main() -> @location(0) vec4<f32> { return u.target_size; }").unwrap();
+        let active = active_uniform_offsets(&module).unwrap();
+        let mask = (0..3).fold(0u8, |m, slot| {
+            m | if active.contains(&(slot * 16)) {
+                1 << slot
+            } else {
+                0
+            }
+        });
+        assert_eq!(mask, 1);
+        let mut block = vec![0; 48];
+        let mut last = Vec::new();
+        let mut header = [[1.0; 4], [0.3; 4], [0.4; 4]];
+        write_uniform_header(&mut block, &header, mask);
+        assert!(uniforms_changed(&mut last, &block));
+        header[1] = [0.5; 4];
+        header[2] = [0.6; 4];
+        write_uniform_header(&mut block, &header, mask);
+        assert!(!uniforms_changed(&mut last, &block));
+        assert_eq!(&block[16..], &[0; 32]);
+        header[0] = [2.0; 4];
+        write_uniform_header(&mut block, &header, mask);
+        assert!(uniforms_changed(&mut last, &block));
+    }
+
+    #[test]
+    fn active_uniforms_keep_nested_members_and_fallback_on_whole_block_load() {
+        let module = |body: &str| {
+            naga::front::wgsl::parse_str(&format!(
+            "struct U {{ unused: vec4<f32>, scalar: f32, pad: vec3<f32>, matrix: mat4x4<f32>, values: array<vec4<f32>, 4> }}; @group(0) @binding(0) var<uniform> u: U; @fragment fn main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {{ {body} }}"
+        )).unwrap()
+        };
+        assert_eq!(
+            active_uniform_offsets(&module("return vec4<f32>(u.scalar);")),
+            Some(HashSet::from([16]))
+        );
+        assert_eq!(
+            active_uniform_offsets(&module("return u.matrix[1] + u.values[u32(p.x) % 4u];")),
+            Some(HashSet::from([48, 112]))
+        );
+        assert!(active_uniform_offsets(&module("let whole = u; return whole.unused;")).is_none());
+    }
+
+    /// Real GLSL translation retains unused declarations in the UBO. They must not force
+    /// changing uploads, while vertex-only inputs, live time and host fields still do.
+    #[test]
+    fn translated_uniform_filter_skips_unused_time_without_freezing_live_inputs() {
+        use horizon_shaders::{Preprocessed, Target, translate_composite};
+        let stage = |code: &str| Preprocessed {
+            code: code.into(),
+            version: Some((120, None)),
+            ..Default::default()
+        };
+        let vs = stage(
+            "uniform float viewWidth; varying float fromVertex; void main() { gl_Position = gl_Vertex; fromVertex = viewWidth; }",
+        );
+        let fs = stage(
+            "uniform float frameTimeCounter; uniform float rainStrength; varying float fromVertex; void main() { gl_FragColor = vec4(rainStrength, fromVertex, 0.0, 1.0); }",
+        );
+        let program = translate_composite(&vs, &fs, Target::Buffers).unwrap();
+        let mut active = active_uniform_offsets(&program.vertex).unwrap();
+        active.extend(active_uniform_offsets(&program.fragment).unwrap());
+        let uniforms = &program.interface.uniforms;
+        let offset = |name| uniforms.iter().find(|u| u.name == name).unwrap().offset;
+        assert!(
+            active.contains(&offset("viewWidth")),
+            "vertex-only input retained"
+        );
+        assert!(active.contains(&offset("rainStrength")));
+        assert!(!active.contains(&offset("frameTimeCounter")));
+        let mut block = vec![0; program.interface.uniform_size as usize];
+        let mut previous = Vec::new();
+        let mut serialize = |time, rain, width| {
+            for (name, value) in [
+                ("frameTimeCounter", time),
+                ("rainStrength", rain),
+                ("viewWidth", width),
+            ] {
+                let at = offset(name);
+                if active.contains(&at) {
+                    block[at as usize..at as usize + 4].copy_from_slice(&f32::to_ne_bytes(value));
+                }
+            }
+            uniforms_changed(&mut previous, &block)
+        };
+        assert!(serialize(0.0, 0.2, 1280.0));
+        assert!(!serialize(1.0, 0.2, 1280.0), "unused time is ignored");
+        assert!(serialize(2.0, 0.4, 1280.0), "live scalar changes upload");
+        assert!(serialize(3.0, 0.4, 1920.0), "vertex input changes upload");
+        drop(serialize);
+        block[0] ^= 1; // Host target/fog header is part of the comparison too.
+        assert!(uniforms_changed(&mut previous, &block));
+        let capacity = previous.capacity();
+        assert!(!uniforms_changed(&mut previous, &block));
+        assert_eq!(previous.capacity(), capacity);
+        let live = stage(
+            "uniform float frameTimeCounter; void main() { gl_FragColor = vec4(frameTimeCounter); }",
+        );
+        let program = translate_composite(&vs, &live, Target::Buffers).unwrap();
+        let time = program
+            .interface
+            .uniforms
+            .iter()
+            .find(|u| u.name == "frameTimeCounter")
+            .unwrap()
+            .offset;
+        assert!(
+            active_uniform_offsets(&program.fragment)
+                .unwrap()
+                .contains(&time)
+        );
+    }
+
+    /// Optimized and complete uploads produce identical pixels over multiple frames;
+    /// changing an unused clock skips one upload, changing the live scalar does not.
+    #[test]
+    fn filtered_uniform_uploads_match_complete_uploads_on_gpu() {
+        use horizon_shaders::{Preprocessed, Target, translate_composite};
+        let stage = |code: &str| Preprocessed {
+            code: code.into(),
+            version: Some((120, None)),
+            ..Default::default()
+        };
+        let program = translate_composite(
+            &stage("void main() { gl_Position = vec4(gl_Vertex.xy * 2.0 - 1.0, 0.0, 1.0); }"),
+            &stage("uniform float frameTimeCounter; uniform float rainStrength; void main() { gl_FragColor = vec4(rainStrength, 0.0, 0.0, 1.0); }"),
+            Target::Buffers,
+        ).unwrap();
+        let mut active = active_uniform_offsets(&program.vertex).unwrap();
+        active.extend(active_uniform_offsets(&program.fragment).unwrap());
+        let mut complete = vec![0; program.interface.uniform_size as usize];
+        let mut filtered = complete.clone();
+        let mut uploaded = Vec::new();
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            assert!(
+                std::env::var_os("HORIZON_REQUIRE_GPU").is_none(),
+                "GPU required"
+            );
+            return;
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let vertex = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(program.vertex)),
+        });
+        let fragment = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(program.fragment)),
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &vertex,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &fragment,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                targets: &[Some(T::Rgba8Unorm.into())],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let ubos = [0, 1].map(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: complete.len() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        let groups = ubos.each_ref().map(|ubo| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ubo.as_entire_binding(),
+                }],
+            })
+        });
+        let textures = [0, 1].map(|_| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: T::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        });
+        let views = textures
+            .each_ref()
+            .map(|t| t.create_view(&Default::default()));
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 512,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut writes = 0;
+        for (frame, rain) in [0.2_f32, 0.2, 0.4].into_iter().enumerate() {
+            for u in &program.interface.uniforms {
+                let value = match u.name.as_str() {
+                    "frameTimeCounter" => frame as f32,
+                    "rainStrength" => rain,
+                    _ => continue,
+                };
+                let at = u.offset as usize;
+                complete[at..at + 4].copy_from_slice(&value.to_ne_bytes());
+                if active.contains(&u.offset) {
+                    filtered[at..at + 4].copy_from_slice(&value.to_ne_bytes());
+                }
+            }
+            queue.write_buffer(&ubos[0], 0, &complete);
+            if uniforms_changed(&mut uploaded, &filtered) {
+                queue.write_buffer(&ubos[1], 0, &filtered);
+                writes += 1;
+            }
+            let mut encoder = device.create_command_encoder(&Default::default());
+            for i in 0..2 {
+                {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: None,
+                        color_attachments: &[attach(
+                            &views[i],
+                            wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        )],
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(&pipeline);
+                    pass.set_bind_group(0, &groups[i], &[]);
+                    pass.draw(0..6, 0..1);
+                }
+                encoder.copy_texture_to_buffer(
+                    textures[i].as_image_copy(),
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &read,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: i as u64 * 256,
+                            bytes_per_row: Some(256),
+                            rows_per_image: None,
+                        },
+                    },
+                    textures[i].size(),
+                );
+            }
+            queue.submit([encoder.finish()]);
+            read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            {
+                let data = read.slice(..).get_mapped_range().unwrap();
+                assert_eq!(&data[..4], &data[256..260]);
+                assert_eq!(data[0], if frame == 2 { 102 } else { 51 });
+            }
+            read.unmap();
+        }
+        assert_eq!(writes, 2, "only the identical second frame skips an upload");
+    }
 
     #[test]
     fn sky_reorder_requires_independent_fully_overwritten_outputs() {

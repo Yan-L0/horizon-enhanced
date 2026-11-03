@@ -363,7 +363,11 @@ fn translate(
         };
         writeln!(vertex_main, "    {name} = {value};").unwrap();
     }
-    vertex_main.push_str(fog);
+    // Do not introduce artificial reads of changing fog uniforms into a stage that
+    // never uses compatibility fog. Keep the shared UBO layout unchanged.
+    if v.tokens.contains(&"gl_Fog") {
+        vertex_main.push_str(fog);
+    }
     for name in &v.inits {
         writeln!(vertex_main, "    {name} = hz_init_{name}();").unwrap();
     }
@@ -383,7 +387,9 @@ fn translate(
     if gbuffers.is_some() {
         fragment_main.push_str(&matrices);
     }
-    fragment_main.push_str(fog);
+    if f.tokens.contains(&"gl_Fog") {
+        fragment_main.push_str(fog);
+    }
     if f.frag_coord {
         fragment_main.push_str(match target {
             Target::Window => "    hz_FragCoord = vec4(gl_FragCoord.x, hz_target.y - gl_FragCoord.y, gl_FragCoord.zw);\n",
@@ -669,6 +675,37 @@ mod tests {
             Target::Window,
         );
         assert!(p.is_ok(), "{:?}", p.err());
+    }
+
+    #[test]
+    fn compatibility_fog_initializes_only_stages_that_use_it() {
+        let stores_fog = |module: &naga::Module| {
+            module
+                .functions
+                .iter()
+                .map(|(_, f)| f)
+                .chain(module.entry_points.iter().map(|e| &e.function))
+                .any(|function| {
+                    function.body.iter().any(|statement| match *statement {
+                    naga::Statement::Store { pointer, .. } => {
+                        matches!(function.expressions[pointer], naga::Expression::GlobalVariable(g)
+                            if module.global_variables[g].name.as_deref() == Some("hz_Fog"))
+                    }
+                    _ => false,
+                })
+                })
+        };
+        let plain = "#version 120\nvoid main() { gl_FragColor = vec4(1.0); }";
+        let fogged = "#version 120\nvec4 tint = gl_Fog.color; void main() { gl_FragColor = tint; }";
+        for (fragment, expected) in [(plain, false), (fogged, true)] {
+            let p = program(
+                &[("composite.vsh", VSH_120), ("composite.fsh", fragment)],
+                Target::Window,
+            )
+            .unwrap();
+            assert!(!stores_fog(&p.vertex));
+            assert_eq!(stores_fog(&p.fragment), expected);
+        }
     }
 
     #[test]
