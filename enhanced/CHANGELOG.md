@@ -1,5 +1,7 @@
 # Development milestones
 
+- **0.4.2-ubo-experimental.1, November 3:** separately packaged Windows x64 and macOS arm64 UBO experiment from `ccaed52`, for user testing. Published as a prerelease; no demonstrated FPS gain, stable renderer remains unchanged. Archives include launchers, checksums and comparison instructions.
+
 - **November 2–3 renderer audit:** reproducible isolated shader-pack comparison tool, two documented Gemini consultations and repeated M2 timings. Active-uniform upload experiment passed 84 tests but did not demonstrate an FPS gain; preserved in `perf/ubo-upload-experiment` and kept out of the stable renderer. See `enhanced/validation/gemini-render-audit-2026-11-02.md`.
 
 - **Windows 0.4.1:** native multi-draw now supplies shader-pack material IDs and reconstructed face normals/tangents, matching the flat path. Previously BSL received `mc_Entity=-1` on the usual Windows path and could not identify water. Native draw batching is preserved. All 29 renderer pack tests passed on M2/Metal, including a GPU regression for both geometry paths with nonzero vertex/instance offsets. Native Windows visual confirmation remains pending.
